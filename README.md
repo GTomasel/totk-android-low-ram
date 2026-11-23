@@ -2,6 +2,8 @@
 
 [![Support this fork on Ko-fi](https://img.shields.io/badge/Support_this_fork_on_Ko--fi-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white)](https://ko-fi.com/gabrielmdq)
 
+TotK Android Low RAM is a fork of [TotK Native for Android](https://github.com/AurelioB/totk-android), the original Android port by Aurelio Bernal.
+
 **TotK Fork** (`com.gtomasel.totk`) runs **The Legend of Zelda: Tears of the Kingdom 1.4.3** natively on Android using the bundled Turnip Vulkan driver. This fork focuses on reducing renderer memory pressure during gameplay and scene transitions. The APK contains no game files. Setup prepares the game on the device from your own copy.
 
 [Download the latest APK and SHA-256 checksum](https://github.com/GTomasel/totk-android-low-ram/releases/latest)
@@ -51,6 +53,6 @@ Source regressions run locally with `python -m unittest discover -s tests` after
 
 ## Credits and license
 
-This fork builds on the Android port of [MacNativeGames](https://github.com/ly05010419/MacNativeGames) and uses components including [D2R Mobile](https://github.com/jhaizhou-ops/d2r-mobile), Ryujinx's shader translator and [Mesa Turnip](https://mesa3d.org). [Third-party credits and licenses](THIRD_PARTY_NOTICES.md)
+The original Android port builds on [MacNativeGames](https://github.com/ly05010419/MacNativeGames). This project uses components including [D2R Mobile](https://github.com/jhaizhou-ops/d2r-mobile), Ryujinx's shader translator and [Mesa Turnip](https://mesa3d.org). [Third-party credits and licenses](THIRD_PARTY_NOTICES.md)
 
 The project is released under the [MIT license](LICENSE). Use game files from your own copy.
