@@ -102,6 +102,33 @@ ANativeActivity *runtime_android_activity(void) { return g_activity; }   /* runt
 void runtime_android_feedback_hardware(ANativeActivity *a);              /* runtime/feedback_android.c */
 const char *runtime_android_private_files(void) { return g_activity ? g_activity->internalDataPath : NULL; }
 
+/* The Android UI reads startup progress independently of the game's Vulkan surface. */
+static pthread_mutex_t boot_progress_mu = PTHREAD_MUTEX_INITIALIZER;
+static char boot_stage[192];
+static jlong boot_count[2];
+
+static void android_boot_update(const char *stage, uint64_t done, uint64_t total) {
+    if (atomic_load_explicit(&presented, memory_order_relaxed)) return;
+    pthread_mutex_lock(&boot_progress_mu);
+    snprintf(boot_stage, sizeof boot_stage, "%s", stage);
+    boot_count[0] = (jlong)done;
+    boot_count[1] = (jlong)total;
+    pthread_mutex_unlock(&boot_progress_mu);
+}
+
+jstring runtime_android_boot_progress(JNIEnv *env, jclass cls, jlongArray counts) {
+    (void)cls;
+    if (atomic_load_explicit(&presented, memory_order_relaxed)) return NULL;
+    char stage[sizeof boot_stage];
+    jlong count[2];
+    pthread_mutex_lock(&boot_progress_mu);
+    memcpy(stage, boot_stage, sizeof stage);
+    memcpy(count, boot_count, sizeof count);
+    pthread_mutex_unlock(&boot_progress_mu);
+    (*env)->SetLongArrayRegion(env, counts, 0, 2, count);
+    return (*env)->NewStringUTF(env, stage);
+}
+
 /* One Looper owns the native Choreographer. Clock-only acquisition/presentation
  * must not change the legacy VI source: only TOTK_PACE=display selects real VI
  * signals. The fixed acquire lattice is independent of display_pace_take(). */

@@ -16,14 +16,16 @@ import com.aure.totk.companion.AssetStore;
 import com.aure.totk.companion.CompanionNative;
 import com.aure.totk.companion.DisplayClass;
 import com.aure.totk.companion.PresentationController;
+import com.aure.totk.setup.BootProgress;
 import com.aure.totk.setup.SetupActivity;   // compile-time constants only: the game process never loads setup classes
 import com.aure.totk.setup.SaveMirror;
 import java.nio.charset.StandardCharsets;
 
-/** The game remains a NativeActivity; only eligible external displays get a Java UI.
+/** The game remains a NativeActivity with a Java startup indicator and optional second-screen companion.
  * SetupActivity (process ":setup") starts it once install.json is playable; the game process never loads the setup library. */
 public final class TotkActivity extends NativeActivity {
     private PresentationController companion;
+    private BootProgress bootProgress;
     /** Copies the saves to the player's save folder after each in-game save (null when no folder is set). */
     private SaveMirror.Watcher saves;
     private AttachedSurfaceControl presentRoot;
@@ -56,6 +58,7 @@ public final class TotkActivity extends NativeActivity {
     private static native void nativeTextInputDone(long serial, byte[] utf8);
     private static native void nativeGameFocus(boolean focused, boolean singleDisplay);
     private static native void nativeGameInputFocus(boolean top);
+    private static native String nativeBootProgress(long[] counts);
 
     /** The overlay's background sampler uses the sticky system snapshot when battery sysfs is unreadable. */
     private int batteryTemperatureDeciC() {
@@ -185,6 +188,7 @@ public final class TotkActivity extends NativeActivity {
         // Query only after super, before constructing a controller or display listener.
         // The companion art is generated on the device by the optional setup stage; without it the companion stays off.
         if (CompanionNative.isEnabled() && AssetStore.available(this)) companion = new PresentationController(this, new CompanionNative());
+        bootProgress = new BootProgress(this, TotkActivity::nativeBootProgress);
         saves = SaveMirror.Watcher.start(this);
         int given = nativeFeedbackEnabled();   // what start_game gave the game (TOTK_RUMBLE / TOTK_GYRO and the hardware)
         if (given != 0 && !isFinishing()) feedback = new GameFeedback(this, given);
@@ -250,6 +254,7 @@ public final class TotkActivity extends NativeActivity {
         ensureMainDisplay();
         GameFeedback f = feedback;
         if (f != null) f.resume();
+        bootProgress.resume();
         showUpdate();
     }
     @Override public void onTopResumedActivityChanged(boolean top) {
@@ -272,6 +277,7 @@ public final class TotkActivity extends NativeActivity {
     }
     @Override protected void onPause() {
         resumed = false;
+        bootProgress.pause();
         applyFrameRateHint();
         GameFeedback f = feedback;
         if (f != null) f.pause();   // no motion in the background, and no motor left running

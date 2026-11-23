@@ -9,6 +9,7 @@ the game version it runs is shown separately. versionCode = major × 10000 + min
 - Fix layer tracking and coordinate formatting in the second-screen map. Keep overview and detail bitmaps in separate bounded caches so they can coexist during zoom.
 - Reuse successful RomFS overlay hash checks when the manifest entries, mod files, base image and index still match.
 - Add optional Lossless Scaling selection and DLL import. Players provide the DLL from their own copy.
+- Show Android startup progress, including the actual percentage while verifying the game data.
 
 ## 1.1.2 (versionCode 10102), game 1.4.3
 
