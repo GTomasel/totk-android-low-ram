@@ -2105,14 +2105,14 @@ needs `su`). The folder holds what the adb-shell folder holds:
 | `driver.so` | the custom Vulkan driver (a Turnip build), picked as an AdrenoTools `.zip` or a 64-bit ARM `.so`. It's copied into the app's private folder at each start, because files on shared storage cannot be loaded as code. Without it, the bundled Turnip driver is used. |
 | `user-data/` | saves to import: on the first start (no private saves yet) they're copied into the app's private storage, where the game keeps its saves from then on. `install_app.sh saves` copies those to the computer. |
 | `totk.env` | options, one `NAME=value` per line (`#` comments), e.g. `TOTK_VK_SHOT=300` or `TOTK_FACE_BUTTONS=position`. Read after the launcher menu's `settings.env` (app-private `files/settings.env`, written by the menu; only the menu's own option keys are accepted there, others are logged and ignored), so a line here overrides the menu. |
-| `totk.log` | the log of the last start (`install_app.sh log`) |
+| `totk.log` | the latest ten launches in chronological order with UTC headings (`install_app.sh log`). Each new attempt caps previous attempts at 512 KiB each, retaining the start and end of longer runs. The current log is written in full. |
 | `totk.ctl` | live switches for in-session A/B runs (below), atomically replaced with each new batch by `tools/bench/live.sh`; startup contents are skipped |
 
 ### Diagnostics: logcat copy, crash reports and the stall watchdog
 
 - **`TOTK_LOGCAT`** (default off; only `1` opts in). `totk.log` stays the primary log (written directly, so a sudden end
   loses nothing). Normally there is no mirror thread, watch, polling or logcat write. When opted in, a thread at nice 10
-  (on the slower CPUs when sysfs shows them) copies its complete lines to logcat with
+  (on the slower CPUs when sysfs shows them) copies complete lines from the current launch to logcat with
   tag `totk`: FATAL, CRASH or "device lost" as errors, red messages (`【红】`, `[RED]`) as warnings, the rest as info;
   lines over 1000 bytes are cut and marked ` [...]`. It sleeps on an inotify watch of the file (20 ms polling only
   without inotify), so an idle log costs no wakeup (`tests/test_log_mirror.py` measures it). The log's

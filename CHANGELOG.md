@@ -10,6 +10,7 @@ the game version it runs is shown separately. versionCode = major × 10000 + min
 - Reuse successful RomFS overlay hash checks when the manifest entries, mod files, base image and index still match.
 - Add optional Lossless Scaling selection and DLL import. Players provide the DLL from their own copy.
 - Show Android startup progress, including the actual percentage while verifying the game data.
+- Keep the latest ten Android launches in `totk.log`, with a size limit for completed attempts. Record the Vulkan subgroup stages and operations supported by the driver.
 
 ## 1.1.2 (versionCode 10102), game 1.4.3
 

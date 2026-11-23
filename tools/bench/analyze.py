@@ -32,7 +32,7 @@ its "caveats" are appended to the generated ones. Never writes a baseline file (
 import argparse, collections, datetime, json, math, os, re, statistics, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from benchlib import SCHEMA, caps_of_limits, device_signature, guard_output, parse_freq_tokens, sig_caps_text  # noqa: E402
+from benchlib import SCHEMA, caps_of_limits, device_signature, guard_output, open_current_log, parse_freq_tokens, sig_caps_text  # noqa: E402
 from sampler import GPU_SNAPSHOT_FILE, gpu_residency_delta, parse_gpu_snapshots, power_of_tokens  # noqa: E402
 from provenance import compilation_of, compilation_summary, compile_record, scene_state  # noqa: E402
 
@@ -130,7 +130,7 @@ def parse_log(path):
     allocation_events, pending_write_back = [], None
     upload_windows, pipeline_windows, walker_windows = {}, {}, {}
     renderer_long_frames, timeline_late_frames = [], []
-    with open(path, encoding='utf-8', errors='replace') as log:
+    with open_current_log(path) as log:
         for line in log:
             if record := compile_record(line):
                 compilations[record[0]] = record[1]
@@ -348,7 +348,7 @@ def parse_ctl(path):
     """The live-switch generations of a log, in order: [{'gen', 'frame', 'applied': [tokens], 'marks': [texts],
     'arm', 'block', 'direction'}]. Missing direction marks in old runs are inferred from the block index."""
     gens = {}
-    with open(path, encoding='utf-8', errors='replace') as fh:
+    with open_current_log(path) as fh:
         lines = [line.rstrip('\n') for line in fh if '[totk-ctl]' in line]
     for line in lines:
         if not (m := CTL_RE.search(line)):
