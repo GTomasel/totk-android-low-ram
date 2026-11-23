@@ -6,6 +6,7 @@ Code in this repository that comes from other projects keeps its license; the li
 |---|---|---|---|
 | `games/totk/third_party/d2r` (NSO rewriter, verification tools) | [d2r-mobile](https://github.com/jhaizhou-ops/d2r-mobile), adapted | MIT | `games/totk/third_party/d2r/LICENSE` |
 | Missing vertex-output compatibility in `games/totk/android/gfx/vk_varyings.h`, adapted through upstream PR #43 | [totk-pc-recomp](https://github.com/valentderah/totk-pc-recomp), Copyright (c) 2026 Valiantsin Dzerakh | MIT | `games/totk/third_party/licenses/totk-pc-recomp.txt` |
+| Shader compatibility and cache follow-up, companion map fixes, RomFS overlay verification reuse, and optional LSFG menu import | [TotK Native](https://github.com/AurelioB/totk-android) PRs [#43](https://github.com/AurelioB/totk-android/pull/43), [#47](https://github.com/AurelioB/totk-android/pull/47), [#54](https://github.com/AurelioB/totk-android/pull/54) and [#59](https://github.com/AurelioB/totk-android/pull/59) by Aurelio Bernal, Dorkington and P1R4N351 | MIT | `LICENSE` |
 | `games/totk/third_party/d2r_gfx` (NVN on Metal, texture tools, host headers) | d2r-mobile, extended for this game | MIT | `games/totk/third_party/d2r_gfx/LICENSE` |
 | texture layout sizes in `games/totk/third_party/d2r_gfx/gfx/nvn/nvn_tex.c` | deko3d | zlib | `games/totk/third_party/d2r_gfx/LICENSE.deko3d` |
 | `games/totk/third_party/d2r_gfx/third_party/bcdec` | [bcdec](https://github.com/iOrange/bcdec) 0.985 | MIT or public domain | `games/totk/third_party/d2r_gfx/third_party/bcdec/LICENSE` |
