@@ -6,6 +6,14 @@ TotK Android Low RAM is a fork of [TotK Native for Android](https://github.com/A
 
 **TotK Fork** (`com.gtomasel.totk`) runs **The Legend of Zelda: Tears of the Kingdom 1.4.3** natively on Android using the bundled Turnip Vulkan driver. This fork focuses on reducing renderer memory pressure during gameplay and scene transitions. The APK contains no game files. Setup prepares the game on the device from your own copy.
 
+## Requirements
+
+- **Android 13 or newer (64-bit ARM)** and a **Qualcomm Adreno GPU compatible with the bundled Mesa Turnip driver**. Mali GPUs are currently unsupported.
+- **Your own copy of Tears of the Kingdom with the 1.4.3 update.** Allow about **40 GB of free storage during setup** and about **20 GB for the prepared game**.
+- This fork was tested on a **Snapdragon 8 Gen 2** with **8 GB RAM** and **Android 16**. Performance and stability vary by device. A full playthrough is still pending.
+
+For a first test, we recommend a **Snapdragon 8 Gen 2 (Adreno 740)** and prefer **12 GB RAM** for extra memory headroom. The original port reached about 30 FPS in short tests on the AYN Thor. The **Dragonwing Q-7790 (Adreno 722)** is also a candidate for testing. The original port measured about 28–30 FPS in short tests on the Retroid Pocket Duo, which still needs testing with this fork. [Original port benchmarks](https://github.com/AurelioB/totk-android#performance)
+
 [Download the latest APK and SHA-256 checksum](https://github.com/GTomasel/totk-android-low-ram/releases/latest)
 
 ## What changed in this fork
@@ -37,7 +45,7 @@ Our device results come from an **8 GB Galaxy S23+ running Android 16** with gam
 
 ## Install or update
 
-1. Download `TotK-Fork-<version>.apk` from [Releases](https://github.com/GTomasel/totk-android-low-ram/releases/latest). Install it on an arm64 device running Android 13 or newer with a compatible Qualcomm Adreno GPU. Our hardware validation covers the S23+ configuration above.
+1. Download `TotK-Fork-<version>.apk` from [Releases](https://github.com/GTomasel/totk-android-low-ram/releases/latest) and install it on a device that meets the [requirements](#requirements).
 2. Open **TotK Fork** and use **Begin setup** to select files from your own copy of the game.
    - **Decrypted dump** uses the updated 1.4.3 RomFS image and the corresponding ExeFS files `main`, `sdk` and `subsdk0`. This is the route verified on the S23+.
    - **Container setup** is also available in the app. It accepts the 1.0.0 base game as XCI or NSP, the 1.4.3 update NSP and the keys from your own console.
@@ -46,6 +54,21 @@ Our device results come from an **8 GB Galaxy S23+ running Android 16** with gam
 Install updates over the existing signed **TotK Fork** installation to keep its saves and settings. To switch from the original app or a development build, use **Saves** to export a backup from that installation and import it into the fork. Export before uninstalling because Android removes that installation's private saves.
 
 Use this repository's Releases page for updates. The built-in update checker still queries the original project's release feed. You can turn it off in **About → Check for updates when the game starts**.
+
+## Report a bug and attach logs
+
+- If you see **Setup stopped**, select **Share details** before selecting **Resume**. Save the shared text as a `.txt` file or paste it into the issue.
+- For a **crash at launch or during play**, copy `totk.log` after the crash and before selecting **Start game** again. Each launch replaces the log. Check **Game data → Storage** for the game data location. If you chose a folder, look inside that folder. For the app folder on an SD card or an older install using shared internal storage, look under `Android/data/com.gtomasel.totk/files/` on that volume.
+
+If the game data is in the app's private internal storage or you cannot access the folder, capture the failure with ADB. Install [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools), enable **USB debugging** in Android's **Developer options**, connect the device by USB and accept the debugging prompt. Run `adb devices` on your computer and check that your device appears with the status `device`. Then start the capture.
+
+```sh
+adb logcat -b main -b system -b crash -b events -v threadtime -T 1 > totk-logcat.txt
+```
+
+With `logcat` running, reproduce the problem and press **Ctrl+C** to stop the capture. The file is saved in the terminal's current directory. [Android's ADB setup guide](https://developer.android.com/tools/adb#Enabling)
+
+Review the log for personal information, then drag the `.log` or `.txt` file into the description of your [GitHub issue](https://github.com/GTomasel/totk-android-low-ram/issues/new). Include your device model, SoC, RAM, Android and app versions, driver name and version if customized, any enabled mods, steps to reproduce, and the exact error or a screenshot.
 
 ## Build and test locally
 
