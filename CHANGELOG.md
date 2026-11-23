@@ -1,9 +1,9 @@
 # Changelog
 
 All notable changes to TotK Native for Android (`com.aure.totk`). The app follows [semantic versioning](https://semver.org);
-the game version it runs is shown separately. versionCode = major × 10000 + minor × 100 + patch.
+the game version it runs is shown separately. Stable builds use versionCode = major × 10000 + minor × 100 + patch.
 
-## Unreleased
+## 1.2.0-beta.1 (versionCode 10103), game 1.4.3
 
 - Apply the upstream shader compatibility follow-up. Cache-only pipeline probes defer modules still being built. Shader rewrite settings use separate cache paths, and the Vulkan driver can reuse compatible cache data from earlier paths.
 - Fix layer tracking and coordinate formatting in the second-screen map. Keep overview and detail bitmaps in separate bounded caches so they can coexist during zoom.
