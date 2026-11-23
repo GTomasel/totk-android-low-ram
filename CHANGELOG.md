@@ -7,6 +7,7 @@ the game version it runs is shown separately. versionCode = major × 10000 + min
 
 - Apply the upstream shader compatibility follow-up. Cache-only pipeline probes defer modules still being built. Shader rewrite settings use separate cache paths, and the Vulkan driver can reuse compatible cache data from earlier paths.
 - Fix layer tracking and coordinate formatting in the second-screen map. Keep overview and detail bitmaps in separate bounded caches so they can coexist during zoom.
+- Reuse successful RomFS overlay hash checks when the manifest entries, mod files, base image and index still match.
 
 ## 1.1.2 (versionCode 10102), game 1.4.3
 

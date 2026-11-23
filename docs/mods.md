@@ -29,8 +29,10 @@ Only the files listed in `manifest.tsv` are served. Each line has four tab-separ
 <RomFS path>	<size>	<SHA-256 of the mod file>	<SHA-256 of the original, or ->
 ```
 
-At startup the loader checks each listed file's size and SHA-256, and checks the original's SHA-256
-against the game image. `-` in the last field adds a file the game's RomFS does not have (used by mods
+The loader checks each listed file's size and SHA-256 and checks the original's SHA-256 against
+the game image. On Android it can reuse those checks on later starts while the manifest entries,
+file identities, game image and index match. `TOTK_ROMFS_VERIFY=full` forces a fresh check.
+`-` in the last field adds a file the game's RomFS does not have (used by mods
 that add assets). Paths are case-sensitive and keep the RomFS spelling.
 
 A folder without `manifest.tsv` means "no mod". Files copied into the folder but not listed are not
