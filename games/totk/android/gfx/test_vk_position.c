@@ -200,6 +200,28 @@ int main(int argc, char **argv) {
         size_t ep0 = 0;
         for (size_t i = 5; i < m.count; i += m.words[i] >> 16) if ((m.words[i] & 0xffff) == 15) ep0 = m.words[i] >> 16;
         assert(ep == ep0 + (size_t)__builtin_popcount(missing) && stores >= (size_t)__builtin_popcount(missing));
+        /* Every truncated instruction/function must fail without touching input. */
+        for (size_t cut = 0; cut < m.count; cut++) {
+            size_t ignored = 0;
+            assert(!vk_spirv_add_outputs(m.words, cut, missing, kinds, &ignored));
+        }
+        const uint32_t short_ep[] = {0x07230203, 0x00010300, 0, 8, 0, OP(1,15)};
+        const uint32_t short_fn[] = {0x07230203, 0x00010300, 0, 8, 0, OP(1,54)};
+        assert(!vk_spirv_add_outputs(short_ep, sizeof short_ep / 4, missing, kinds, &n));
+        assert(!vk_spirv_add_outputs(short_fn, sizeof short_fn / 4, missing, kinds, &n));
+        assert(!vk_spirv_add_outputs(m.words, SIZE_MAX, missing, kinds, &n));
+        module bad = clone(m.words, m.count); bad.words[5] = OP(65535,17);
+        assert(!vk_spirv_add_outputs(bad.words, bad.count, missing, kinds, &n)); free(bad.words);
+        bad = clone(m.words, m.count); bad.words[5] = 0;
+        assert(!vk_spirv_add_outputs(bad.words, bad.count, missing, kinds, &n)); free(bad.words);
+        size_t ep_at = 5;
+        while ((m.words[ep_at] & 0xffff) != 15) ep_at += m.words[ep_at] >> 16;
+        size_t ep_words = m.words[ep_at] >> 16, padding = UINT16_MAX - ep_words;
+        module huge = {calloc(m.count + padding, 4), m.count + padding}; assert(huge.words);
+        memcpy(huge.words, m.words, (ep_at + ep_words) * 4);
+        huge.words[ep_at] = OP(UINT16_MAX,15);
+        memcpy(huge.words + ep_at + UINT16_MAX, m.words + ep_at + ep_words, (m.count - ep_at - ep_words) * 4);
+        assert(!vk_spirv_add_outputs(huge.words, huge.count, missing, kinds, &n)); free(huge.words);
         assert(!vk_spirv_add_outputs(m.words, m.count, 0, kinds, &n));   /* nothing missing: nothing to do */
         if (argc == 2) {
             char path[1024]; snprintf(path, sizeof path, "%s/varyings-%d.spv", argv[1], block);

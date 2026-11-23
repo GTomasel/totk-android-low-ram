@@ -94,6 +94,8 @@ Everything not in the menu is a developer switch. A selection:
 | `TOTK_FRAMEGEN=locked` / `hybrid` / `adaptive` / `interp` | Frame-generation modes; *locked* is the menu's *Interpolation*. The others are opt-in qualification modes with their own required timing settings ([frame-interpolation.md](frame-interpolation.md), APP.md *Device profiles*). |
 | `TOTK_FRAMEGEN_ENGINE=lsfg` (+ `TOTK_LSFG_PERF`, `TOTK_LSFG_FLOW`) | Experimental LSFG frame generation with your own, privately owned DLL; only with the locked timing block. |
 | `TOTK_PSO_PREWARM=0` | Turns off the startup pipeline prewarm from the packaged key list. |
+| `TOTK_PSO_PROBE_MIGRATED_CACHE=1` | After a driver cache is imported to a new policy path, try up to 32 cache-only pipeline probes at startup. Misses go to the existing compile path. Off by default. |
+| `TOTK_VK_NAN_MINMAX=0` | Disable the Maxwell NaN min/max compatibility rewrite for comparison. The fork keeps it enabled by default and uses a separate pipeline-cache path for each setting. |
 | `TU_DEBUG=…` | Turnip debug flags (e.g. `noslabcs`); on Adreno 722 an absent `TU_DEBUG` defaults to `sysmem`. |
 
 The complete, current list of switches with their status and evidence is in

@@ -723,7 +723,8 @@ typedef struct vk_prog vk_prog;
 int vk_prog_resolve(const prog_t *p, vk_shader *out[6]);
 void vk_stage_sig_invalidate(unsigned stages);   /* recording-thread state writes: one bit per NVN stage */
 void vk_prog_prepare(const prog_t *p); /* bind-time compute compilation, no variant selection or graphics seed IO */
-VkShaderModule vk_vs_module_for(vk_shader *vs, const vk_shader *fs);   /* vs->mod, or one with fs's missing varyings added */
+/* create=0: cache-only, NULL means defer; create=1: build/join the exact interface. */
+VkShaderModule vk_vs_module_for(vk_shader *vs, const vk_shader *fs, int create);
 VkPipelineLayout vk_layout_of(vk_shader *vs, vk_shader *fs);
 VkPipeline vk_compute_pipeline(vk_shader *cs, VkPipelineLayout *layout);
 void vk_compute_start(void);
@@ -744,6 +745,7 @@ int vk_unwritten_mask_on(void);                 /* TOTK_VK_UNWRITTEN_MASK: pipel
 int vk_shaders_ready(void);
 void vk_shader_seed_startup(const char *game_dir); /* freeze game-relative selection and diagnose seed before replay */
 const char *vk_shader_cache_path(const char *base, char *out, size_t size); /* folder/content-isolated disk state */
+const char *vk_shader_cache_predecessor(const char *base, unsigned index, char *out, size_t size); /* seven same-seed/position arms */
 vk_shader *vk_shader_seed(const char *variant, int stage, int early_tests); /* startup/replay exact seed, no guest state */
 vk_shader *vk_shader_alpha(vk_shader *base, unsigned func);
 void vk_pipeline_prewarm(void);   /* device/cache ready, before replay: load keys and queue the compile workers */
