@@ -3,7 +3,7 @@
 All notable changes to TotK Native for Android (`com.aure.totk`). The app follows [semantic versioning](https://semver.org);
 the game version it runs is shown separately. Stable builds use versionCode = major × 10000 + minor × 100 + patch.
 
-## Unreleased
+## 1.2.0-beta.2 (versionCode 10104), game 1.4.3
 
 - Add an Advanced debugging menu for compatibility, rendering, performance and diagnostic overrides. Confirm when saved changes take effect, record launch settings, and export the combined recent launch log.
 - Reduce the overhead of opt-in frame timing. Timeline and fence producers try their diagnostic locks once, report contention losses, and batch recorder draw and descriptor counts per assembled slot. Timeline-only launches reuse existing per-walk elapsed timing. Category timing still requires the full recorder profiler.
