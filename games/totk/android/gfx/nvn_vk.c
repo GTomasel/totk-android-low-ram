@@ -55,12 +55,41 @@ vk_dev V;
 #include "vk_sections.inc"
 #define g_dev V.dev
 static _Atomic uint64_t g_memory_live[VK_MEMORY_PURPOSES], g_memory_created[VK_MEMORY_PURPOSES];
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+static PFN_vkGetPhysicalDeviceMemoryProperties2 g_memory_props2;
+static _Atomic uint64_t g_diagnostic_frame, g_diagnostic_submit, g_diagnostic_gpu_done;
+static atomic_uint g_memory_failures;
+
+static void android_heap_sample(uint64_t frame) {
+    if (!g_memory_props2) return;
+    VkPhysicalDeviceMemoryBudgetPropertiesEXT budget = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_BUDGET_PROPERTIES_EXT};
+    VkPhysicalDeviceMemoryProperties2 memory = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2, &budget};
+    g_memory_props2(V.pd, &memory);
+    for (uint32_t i = 0; i < memory.memoryProperties.memoryHeapCount; i++) {
+        VkMemoryHeap heap = memory.memoryProperties.memoryHeaps[i];
+        LOGV("[memory-budget] frame=%llu heap=%u flags=0x%x size_bytes=%llu usage_estimate_bytes=%llu budget_hint_bytes=%llu",
+             (unsigned long long)frame, i, heap.flags, (unsigned long long)heap.size,
+             (unsigned long long)budget.heapUsage[i], (unsigned long long)budget.heapBudget[i]);
+    }
+}
+
+void vk_android_memory_frame(uint64_t frame) {
+    atomic_store_explicit(&g_diagnostic_frame, frame, memory_order_relaxed);
+    if (frame == 1 || (frame <= 600 && frame % 60 == 0) || frame % 300 == 0)
+        android_heap_sample(frame);
+}
+#endif
 VkResult vk_memory_allocate(const VkMemoryAllocateInfo *info, VkDeviceMemory *memory, vk_memory_purpose purpose) {
     VkResult result = vkAllocateMemory(V.dev, info, NULL, memory);
     if (!result) {
         atomic_fetch_add_explicit(&g_memory_live[purpose], 1, memory_order_relaxed);
         atomic_fetch_add_explicit(&g_memory_created[purpose], 1, memory_order_relaxed);
     }
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+    else if (atomic_fetch_add_explicit(&g_memory_failures, 1, memory_order_relaxed) < 16)
+        LOGV("[memory-allocation] result=%d purpose=%d requested_bytes=%llu memory_type=%u",
+             result, purpose, (unsigned long long)info->allocationSize, info->memoryTypeIndex);
+#endif
     return result;
 }
 void vk_memory_release(VkDeviceMemory memory, vk_memory_purpose purpose) {
@@ -711,6 +740,13 @@ static void vk_init_once(void) {
     vkEnumerateDeviceExtensionProperties(V.pd, NULL, &g_next, NULL);
     g_ext = VK_CALLOC(g_next, sizeof *g_ext);
     vkEnumerateDeviceExtensionProperties(V.pd, NULL, &g_next, g_ext);
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+    if (has_ext(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME))
+        g_memory_props2 = (PFN_vkGetPhysicalDeviceMemoryProperties2)gipa(V.inst, "vkGetPhysicalDeviceMemoryProperties2");
+    LOGV("[gpu-diagnostics] memory_budget=%s device_fault_ext=%s (driver capability)",
+         g_memory_props2 ? "available" : "unavailable", has_ext("VK_EXT_device_fault") ? "advertised" : "unavailable");
+    android_heap_sample(0);
+#endif
     int gpl_extensions = has_ext("VK_EXT_graphics_pipeline_library") && has_ext("VK_KHR_pipeline_library");
     if (gpl_extensions) {
         VkPhysicalDeviceGraphicsPipelineLibraryPropertiesEXT gplp = {
@@ -2067,6 +2103,12 @@ typedef struct {
     int publication, join_on_walk, native_lag, submit_busy;
     uint64_t ft_frame, ft_gpu_done; /* walking-captured owner; fence observation published by the GPU cursor */
     uint64_t guest_submit_ns, guest_origin_ticks, guest_frame, queue_ns;
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+    uint64_t diag_present_frame;
+    vk_pass_end_kind diag_submit_reason;
+    uint32_t diag_command_buffers;
+    int diag_post_ops;
+#endif
     uint32_t tsq_first, tsq_count;
     nvn_dirty_lag_batch walking_guards; /* walking-built, immutable until this slot's queue publication */
     arena_t ar;   /* transient memory */
@@ -2203,6 +2245,36 @@ static slot_t *g_optional_next; /* recorder-owned preclaimed external continuati
 static post_op *g_carry; static int g_ncarry, g_capcarry;
 static uint64_t g_fence, g_reserved_fence; /* g_mu: actual queue publication versus walking reservations */
 static _Atomic uint64_t g_done;
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+_Noreturn void vk_android_abort_result(VkResult result) {
+    static atomic_flag fatal = ATOMIC_FLAG_INIT;
+    if (atomic_flag_test_and_set_explicit(&fatal, memory_order_relaxed)) {
+        /* Give the first failing thread time to finish the bounded snapshot and open the menu. */
+        struct timespec grace = {2, 0};
+        nanosleep(&grace, NULL);
+        abort();
+    }
+    const char *name = result == VK_ERROR_DEVICE_LOST ? "VK_ERROR_DEVICE_LOST" :
+                       result == VK_ERROR_OUT_OF_DEVICE_MEMORY ? "VK_ERROR_OUT_OF_DEVICE_MEMORY" :
+                       result == VK_ERROR_OUT_OF_HOST_MEMORY ? "VK_ERROR_OUT_OF_HOST_MEMORY" : "other";
+    LOGV("[gpu-fatal] result=%d name=%s presenter_frame=%llu last_queued=%llu last_gpu_completed=%llu last_posts_completed=%llu allocation_failures=%u",
+         result, name, (unsigned long long)atomic_load_explicit(&g_diagnostic_frame, memory_order_relaxed),
+         (unsigned long long)atomic_load_explicit(&g_diagnostic_submit, memory_order_relaxed),
+         (unsigned long long)atomic_load_explicit(&g_diagnostic_gpu_done, memory_order_relaxed),
+         (unsigned long long)atomic_load_explicit(&g_done, memory_order_relaxed),
+         atomic_load_explicit(&g_memory_failures, memory_order_relaxed));
+    uint64_t n[VK_MEMORY_PURPOSES];
+    vk_memory_counts(n);
+    LOGV("[gpu-fatal] Vulkan live allocations pool/slot/snapshot/image-block/image-dedicated/present/readback/zero/diagnostic/overlay=%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu/%llu",
+         (unsigned long long)n[0], (unsigned long long)n[1], (unsigned long long)n[2], (unsigned long long)n[3],
+         (unsigned long long)n[4], (unsigned long long)n[5], (unsigned long long)n[6], (unsigned long long)n[7],
+         (unsigned long long)n[8], (unsigned long long)n[9]);
+    runtime_android_crash_memory("vulkan-fatal");
+    fflush(stderr);
+    if (result == VK_ERROR_DEVICE_LOST) runtime_android_game_error(RUNTIME_GAME_ERROR_GPU_LOST);
+    abort();
+}
+#endif
 static uint64_t g_ub_publication;   /* g_mu: final ticket whose CPU-known UBO bytes must publish before posts/done */
 static uint64_t g_done_at;   /* g_mu: publication time, sampled only by a waiter which actually blocked */
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER, g_cv_work = PTHREAD_COND_INITIALIZER;
@@ -2686,13 +2758,28 @@ static void apply_posts(slot_t *owner, const vk_gpu_time_slot *last_slot, int la
         }
     }
 }
+static void gpu_slot_failure(const slot_t *s) {
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+    uint64_t elapsed = runtime_now_ns() - s->queue_ns;
+    LOGV("[gpu-fatal-slot] submission=%llu presenter_frame_at_seal=%llu guest_frame=%llu submit_reason=%d command_buffers=%u post_ops=%d queue_age_ms=%.3f",
+         (unsigned long long)s->value, (unsigned long long)s->diag_present_frame,
+         (unsigned long long)s->guest_frame, s->diag_submit_reason, s->diag_command_buffers,
+         s->diag_post_ops, elapsed / 1e6);
+#else
+    (void)s;
+#endif
+}
 static void gpu_wait_slot(slot_t *s) {
     VkResult r = vkWaitForFences(V.dev, 1, &s->fence, VK_TRUE, 5000000000ull);
     for (int waited = 5; r == VK_TIMEOUT; waited += 5) {
         LOGV("【红】the GPU has not finished submission %llu after %d s (last finished: %llu)", (unsigned long long)s->value, waited, (unsigned long long)atomic_load(&g_done));
         r = vkWaitForFences(V.dev, 1, &s->fence, VK_TRUE, 5000000000ull);
     }
-    if (r) VK_DIE_RESULT(r, "waiting for the GPU (submission %llu): %d%s", (unsigned long long)s->value, r, r == VK_ERROR_DEVICE_LOST ? " (device lost)" : "");
+    if (r) {
+        gpu_slot_failure(s);
+        VK_DIE_RESULT(r, "vkWaitForFences: submission=%llu result=%d%s", (unsigned long long)s->value, r,
+                      r == VK_ERROR_DEVICE_LOST ? " (device lost)" : "");
+    }
 }
 /* Never writes guest memory. A post-op write may fault on a page a LATER submitted frame reads. The original
    completion thread cannot publish that later GPU fence while blocked in its own post op, so a GPU-only cursor is
@@ -2708,6 +2795,9 @@ static void *gpu_guard_thread(void *unused) {
         pthread_mutex_unlock(&g_mu);
         totk_live_slack_tick();   /* a live TOTK_TIMER_SLACK_NS: this thread applies it itself */
         gpu_wait_slot(s);
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+        atomic_store_explicit(&g_diagnostic_gpu_done, s->value, memory_order_relaxed);
+#endif
         if (s->ft_frame && totk_ft_on()) s->ft_gpu_done = totk_ft_now();
         nvn_dirty_lag_complete(s->value);
         pthread_mutex_lock(&g_mu);
@@ -2733,6 +2823,9 @@ static void *completion_thread(void *arg) {
         totk_live_slack_tick();
         if (g_lag_wait != 1) {
             gpu_wait_slot(s);
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+            atomic_store_explicit(&g_diagnostic_gpu_done, s->value, memory_order_relaxed);
+#endif
             if (s->ft_frame && totk_ft_on()) s->ft_gpu_done = totk_ft_now();
         }
         uint64_t t1 = g_hitch_on ? host_now_ns() : 0;   /* observed GPU completion handoff, not the driver's actual signal time */
@@ -3253,13 +3346,13 @@ static void *arena_alloc_with_usage(arena_t *a, size_t size, size_t align, VkBuf
             VkMemoryAllocateInfo mai = {VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = req.size, .memoryTypeIndex = (uint32_t)t};
             vk_memory_purpose purpose = a->min ? VK_MEMORY_SNAPSHOT : VK_MEMORY_SLOT;
             VkResult result = vk_memory_allocate(&mai, &c->mem, purpose);
-            if (result) DIE("arena vkAllocateMemory failed: %d; buffer %llu, allocation %llu bytes, memory type %d, %s arena",
+            if (result) VK_DIE_RESULT(result, "arena vkAllocateMemory failed: %d; buffer %llu, allocation %llu bytes, memory type %d, %s arena",
                 result, (unsigned long long)c->size, (unsigned long long)req.size, t, a->min ? "snapshot" : "slot");
             c->allocation = req.size;
             arena_memory_update(c, purpose, 1);
             VKCHECK(vkBindBufferMemory(V.dev, c->buf, c->mem, 0));
             result = vkMapMemory(V.dev, c->mem, 0, VK_WHOLE_SIZE, 0, (void **)&c->ptr);
-            if (result) DIE("arena vkMapMemory failed: %d; allocation %llu bytes, memory type %d, %s arena",
+            if (result) VK_DIE_RESULT(result, "arena vkMapMemory failed: %d; allocation %llu bytes, memory type %d, %s arena",
                 result, (unsigned long long)req.size, t, a->min ? "snapshot" : "slot");
             at = 0;
             if (compact_start) arena_compact_ns[a->min != 0] += host_now_ns() - compact_start;
@@ -3301,7 +3394,7 @@ static uint32_t slot_alloc_sets(void *owner, VkDescriptorSetLayout layout, uint3
             VkResult r = vkAllocateDescriptorSets(V.dev, &ai, out);
             vk_record_descriptor_primary(r ? 0 : count, 1, 0);
             if (!r) { s->curdsets += (int)count; totk_ft_count(FT_COUNT_DESC_CREATES, count); return count; }
-            if (r != VK_ERROR_OUT_OF_POOL_MEMORY && r != VK_ERROR_FRAGMENTED_POOL) DIE("vkAllocateDescriptorSets: %d", r);
+            if (r != VK_ERROR_OUT_OF_POOL_MEMORY && r != VK_ERROR_FRAGMENTED_POOL) VK_DIE_RESULT(r, "vkAllocateDescriptorSets: %d", r);
             if (count > 1) { count /= 2; continue; }   /* large layouts may fit fewer than a whole batch */
             if (s->curdpool + 1 < s->ndpool) { s->curdpool++; s->curdsets = 0; continue; }
         }
@@ -3388,11 +3481,21 @@ static void slot_queue(slot_t *s, int background) {
     int ft_on = s->ft_frame && totk_ft_on();
     uint64_t start = ft_on ? totk_ft_now() : host_now_ns();
     s->queue_ns = runtime_now_ns();
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+    s->diag_command_buffers = si.commandBufferInfoCount;
+#endif
     VkResult r = vkQueueSubmit2(V.queue, 1, &si, s->fence);
     uint64_t end = ft_on ? totk_ft_now() : host_now_ns();
     atomic_fetch_add_explicit(&g_queue_call_ns, end - start, memory_order_relaxed);
     if (ft_on) totk_ft_slot_queue(s->ft_frame, s->value, start, end);
-    if (r) VK_DIE_RESULT(r, "vkQueueSubmit2: %d%s", r, r == VK_ERROR_DEVICE_LOST ? " (device lost)" : "");
+    if (r) {
+        gpu_slot_failure(s);
+        VK_DIE_RESULT(r, "vkQueueSubmit2: submission=%llu result=%d%s", (unsigned long long)s->value, r,
+                      r == VK_ERROR_DEVICE_LOST ? " (device lost)" : "");
+    }
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+    atomic_store_explicit(&g_diagnostic_submit, s->value, memory_order_relaxed);
+#endif
     if (external) g_external[s-g_ring].signal=g_external[s-g_ring].wait=VK_NULL_HANDLE;
     nvn_dirty_lag_submitted(s->value);
     if (background) pthread_mutex_lock(&g_mu);
@@ -3607,6 +3710,11 @@ static uint64_t slot_submit_inner(int with_posts, vk_pass_end_kind reason) {
     s->guest_submit_ns = g_in_sub || with_posts ? g_gpu_guest_ns : 0;
     s->guest_origin_ticks = g_in_sub || with_posts ? g_gpu_origin_ticks : 0;
     s->guest_frame = g_in_sub || with_posts ? g_gpu_guest_frame : 0;
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+    s->diag_present_frame = atomic_load_explicit(&g_diagnostic_frame, memory_order_relaxed);
+    s->diag_submit_reason = reason;
+    s->diag_post_ops = s->npost;
+#endif
     if (totk_ft_on()) {
         s->ft_frame = totk_ft_current();
         totk_ft_slot_seal(s->ft_frame, s->value, totk_ft_now());

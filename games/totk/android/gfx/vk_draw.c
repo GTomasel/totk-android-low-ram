@@ -10632,6 +10632,7 @@ uint64_t mtl_present(const tex_t *t, double period, const int crop[4]) {
     (void)period;
 #endif
     uint64_t now = host_now_ns(), n = ++g_present_n;
+    vk_android_memory_frame(n);
     hitch_present(now, n);
     if (vk_lag_capture_on()) nvn_dirty_lag_frame(n + 1);
     probe_frame_end(n);

@@ -1945,12 +1945,15 @@ public final class SetupActivity extends Activity implements SetupService.Listen
             try (OutputStream out = resolver.openOutputStream(destination, "wt")) {
                 if (out == null) throw new IOException("Document provider did not open the destination");
                 byte[] buffer = new byte[64 * 1024];
+                LaunchExitDiagnostics exits = new LaunchExitDiagnostics();
                 while (remaining > 0) {
                     int read = Os.read(source, buffer, 0, (int) Math.min(remaining, buffer.length));
                     if (read <= 0) throw new IOException("Launch log changed during export");
                     out.write(buffer, 0, read);
+                    exits.scan(buffer, read);
                     remaining -= read;
                 }
+                out.write(exits.report(this, stat.st_mtime * 1000L).getBytes(StandardCharsets.UTF_8));
             }
             return null;
         } catch (ErrnoException error) {

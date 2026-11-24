@@ -6,6 +6,7 @@
 #define RUNTIME_GAME_ERROR_GPU_LOST "The graphics driver stopped responding (Vulkan device lost), so the game had to close."
 #if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
 void runtime_android_game_error(const char *reason);
+void runtime_android_crash_memory(const char *phase);
 #else
 static inline void runtime_android_game_error(const char *reason) { (void)reason; }
 #endif

@@ -2,6 +2,8 @@
 #include "vk_shader.c"
 #include <assert.h>
 
+vk_dev V;
+
 int main(int argc, char **argv) {
     assert(argc == 2);
     const char *game_dir = getenv("TEST_GAME_DIR");
@@ -24,6 +26,14 @@ int main(int argc, char **argv) {
     size_t n; char *data = read_file(path, &n);
     assert(data && n == strlen(argv[1]) && !memcmp(data, argv[1], n)); free(data);
     if (vk_seed_io_active()) { vk_seed_io_stats stats; vk_seed_io_stats_get(&stats); assert(stats.entries == 1); }
+    const char *subgroup = getenv("TEST_SUBGROUP_POLICY");
+    int policy = subgroup ? atoi(subgroup) : 0;
+    if (policy & 1) {
+        V.pd = (VkPhysicalDevice)(uintptr_t)1;
+        V.subgroup.supportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
+        V.subgroup.supportedOperations = 0x67f;
+    }
+    V.subgroup_fix = (policy & 2) != 0;
     assert(vk_shader_cache_path("state/vk-pipeline-cache.bin", cache, sizeof cache));
     assert(vk_shader_cache_path("state/vk-prewarm.bin", prewarm, sizeof prewarm));
     assert(vk_shader_cache_path("custom-import", imported, sizeof imported));

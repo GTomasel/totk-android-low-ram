@@ -47,9 +47,11 @@ class ShaderSeedTests(unittest.TestCase):
             launch = root / 'unrelated-working-directory'
             launch.mkdir()
 
-            def run(folder, marker, indexed=False, position=('0', '0'), mutate=False, fold: str | None = '0', vary='0', nan='0'):
+            def run(folder, marker, indexed=False, position=('0', '0'), mutate=False, fold: str | None = '0',
+                    vary='0', nan='0', subgroup=0):
                 e = dict(env)
                 e['TOTK_VK_SEED_IO'] = '1' if indexed else '0'
+                e['TEST_SUBGROUP_POLICY'] = str(subgroup)
                 e['TOTK_VK_POS_INVARIANT'], e['TOTK_VK_POS_NOCONTRACT'] = position
                 e['TOTK_VK_VARYING_FIX'], e['TOTK_VK_NAN_MINMAX'] = vary, nan
                 if fold is None:
@@ -79,6 +81,10 @@ class ShaderSeedTests(unittest.TestCase):
             self.assertEqual(run('seed-opt/v143', 'optimized', indexed=True)[1:4], alternate[1:4])
             legacy = ['state/vk-pipeline-cache.bin', 'state/vk-prewarm.bin', 'custom-import']
             self.assertEqual(original[1:4], legacy)
+            for policy, suffix in ((1, '.sgstage-v1-20-67f'), (2, '.sg32-v1'), (3, '.sgstage-v1-20-67f.sg32-v1')):
+                arm = run(None, 'original', subgroup=policy)
+                self.assertEqual(arm[1:4], [path + suffix for path in legacy])
+                self.assertEqual(arm[-1], arm[1] + '.pso-state')
             # All four immutable precision arms isolate pipeline, prewarm and
             # explicit import paths, for canonical and alternate seeds alike.
             for folder, marker, baseline in ((None, 'original', original),

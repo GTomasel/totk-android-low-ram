@@ -105,6 +105,7 @@ static void identity_sink(const char *commit, const char *package, uint64_t vers
 }
 static void (*vk_gpuprof_identity)(const char *, const char *, uint64_t, const char *) = identity_sink;
 static void log_mirror_start(void) { assert(phase == 1); }   /* after the log, before any startup boundary */
+static void crash_diagnostics_start(void) { check_environment(); assert(phase == 1); }
 static void live_ctl_start(void) { assert(phase == 1); }     /* the live-switch reader: after totk.env, before the game */
 static void thread_sampler_start(void) { assert(phase == 1); }   /* TOTK_THREAD_SAMPLER's launch value: after totk.env */
 static void totk_thread_game_startup(void) { check_environment(); assert(phase == 1); phase = 2; }

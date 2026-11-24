@@ -166,6 +166,21 @@ preparation by actual context changes; it has no valid game camera and cannot
 prove <1ms on Thor. See `APP.md` for raw host measurements, reproduction and the
 exact operator-run generated-count/fence-cadence/latency/video acceptance plan.
 
+## Vulkan subgroup stage compatibility
+
+The runtime checks translated subgroup instructions against the Vulkan device's
+stage and operation masks before it creates a shader module. Adreno 650 Turnip
+reports compute-only subgroup support. For the verified AGL fragment
+visibility counters, unsupported stages use a one-lane fallback. Each
+participating non-helper fragment contributes one to the same counter that
+the original shader's elected lane updated with the ballot population count.
+The shader keeps its depth-test mode, branch conditions and independent
+atomics. The fallback checks the source key and the generated election and
+atomic data flow. Four source keys qualify, including two in the title
+warm-up list. The runtime logs refused variants and skips those draws, including
+unverified reductions with fragment-dependent counter addresses and arbitrary
+cross-lane shuffles. Disk pipeline caches are isolated by the subgroup policy.
+
 ## Logical 32-lane subgroups (experimental)
 
 `TOTK_VK_SUBGROUP_FIX=1` reconciles translated Maxwell subgroup operations with

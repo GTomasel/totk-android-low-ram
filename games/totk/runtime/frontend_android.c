@@ -42,6 +42,7 @@
 #include "build_kind.h"
 #include "android_perf.h"
 #include "android_memory.h"
+#include "android_diagnostics.h"
 #include "romfs_scan.h"
 #include <android/api-level.h>
 #include <android/choreographer.h>
@@ -62,7 +63,10 @@
 #include <jni.h>
 #include <limits.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
+#include <sys/utsname.h>
 #include <unistd.h>
 #include "adreno_gmem.h"
 #include "overlay_chord.h"
@@ -1186,6 +1190,46 @@ static void log_start(void) {
     if (trim_error) fprintf(stderr, "[totk-log] Could not trim launch history: %s\n", strerror(trim_error));
     __android_log_print(ANDROID_LOG_INFO, "totk", "log: %s", g_log_path);
 }
+
+static uint64_t crash_diagnostics_start_ns;
+static void crash_memory(const char *phase, AndroidMemoryDetail detail) {
+    uint64_t uptime = crash_diagnostics_start_ns ? runtime_now_ns() - crash_diagnostics_start_ns : 0;
+    android_memory_diagnostics(stderr, phase, uptime / 1000000, "/proc",
+                               "/sys/class/kgsl/kgsl/proc", getpid(), detail);
+}
+void runtime_android_crash_memory(const char *phase) {
+    crash_memory(phase, ANDROID_MEMORY_FATAL);
+}
+static void *crash_memory_sampler(void *unused) {
+    (void)unused;
+    totk_thread_start("totk-memlog", NULL);
+    setpriority(PRIO_PROCESS, 0, 10);
+    for (unsigned sample = 0; sample < 12; sample++) {
+        sleep(5);
+        crash_memory("sample", sample % 2 == 0 ? ANDROID_MEMORY_FULL : ANDROID_MEMORY_FAST);
+    }
+    for (;;) {
+        sleep(30);
+        crash_memory("sample", ANDROID_MEMORY_FULL);
+    }
+    return NULL;
+}
+static void crash_diagnostics_start(void) {
+    crash_diagnostics_start_ns = runtime_now_ns();
+    char model[PROP_VALUE_MAX] = "", board[PROP_VALUE_MAX] = "", build[PROP_VALUE_MAX] = "";
+    __system_property_get("ro.product.model", model);
+    __system_property_get("ro.board.platform", board);
+    __system_property_get("ro.build.id", build);
+    struct utsname info;
+    const char *kernel = uname(&info) ? "na" : info.release;
+    fprintf(stderr, "[totk-device] model=\"%s\" platform=\"%s\" build_id=\"%s\" kernel=%s page_bytes=%ld\n",
+            model, board, build, kernel, sysconf(_SC_PAGESIZE));
+    crash_memory("launch", ANDROID_MEMORY_FAST);
+    pthread_t thread;
+    int error = pthread_create(&thread, NULL, crash_memory_sampler, NULL);
+    if (!error) pthread_detach(thread);
+    else fprintf(stderr, "[totk-memory] sampler unavailable: %s\n", strerror(error));
+}
 /* The logcat copy (log_mirror.h): a thread that sleeps until totk.log grows, then copies its new complete lines with
    tag "totk" (FATAL / CRASH / device lost as errors, red messages as warnings). It runs at nice 10, on the slower CPUs
    when the device has them, and reads from this launch's heading so it copies the early startup lines too.
@@ -1807,6 +1851,7 @@ static int start_game(const ANativeActivity *a) {
     totk_android_memory_configure_allocator();
     gpu_profile_identity(a);
     log_mirror_start();   /* TOTK_LOGCAT is final now */
+    crash_diagnostics_start();
     live_ctl_start();     /* after totk.env: its values are the launch values a live "unset" returns to */
     thread_sampler_start();
     totk_thread_game_startup();   /* snapshot the allowed CPUs before any guest narrows its affinity */

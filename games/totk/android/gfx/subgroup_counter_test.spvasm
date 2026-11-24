@@ -1,0 +1,57 @@
+; Ryujinx visibility-counter instruction form, with an unused atomic return.
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformBallot
+%glsl = OpExtInstImport "GLSL.std.450"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %lane %helper %buffer
+OpExecutionMode %main OriginUpperLeft
+OpExecutionMode %main EarlyFragmentTests
+OpName %lane "lane"
+OpDecorate %lane BuiltIn SubgroupLocalInvocationId
+OpDecorate %lane Flat
+OpDecorate %helper BuiltIn HelperInvocation
+OpDecorate %block Block
+OpMemberDecorate %block 0 Offset 0
+OpDecorate %buffer DescriptorSet 0
+OpDecorate %buffer Binding 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%uint = OpTypeInt 32 0
+%v4 = OpTypeVector %uint 4
+%input_bool = OpTypePointer Input %bool
+%input_uint = OpTypePointer Input %uint
+%block = OpTypeStruct %uint
+%storage = OpTypePointer StorageBuffer %block
+%element = OpTypePointer StorageBuffer %uint
+%lane = OpVariable %input_uint Input
+%helper = OpVariable %input_bool Input
+%buffer = OpVariable %storage StorageBuffer
+%true = OpConstantTrue %bool
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%scope = OpConstant %uint 3
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%is_helper = OpLoad %bool %helper
+OpSelectionMerge %exit None
+OpBranchConditional %is_helper %exit %visible
+%visible = OpLabel
+%ballot = OpGroupNonUniformBallot %v4 %scope %true
+%bits = OpCompositeExtract %uint %ballot 0
+%last = OpExtInst %uint %glsl FindUMsb %bits
+%own = OpLoad %uint %lane
+%elected = OpIEqual %bool %last %own
+OpSelectionMerge %done None
+OpBranchConditional %elected %add %done
+%add = OpLabel
+%number = OpBitCount %uint %bits
+%ptr = OpAccessChain %element %buffer %zero
+%result = OpAtomicIAdd %uint %ptr %one %zero %number
+OpBranch %done
+%done = OpLabel
+OpBranch %exit
+%exit = OpLabel
+OpReturn
+OpFunctionEnd

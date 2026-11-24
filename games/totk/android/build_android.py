@@ -334,6 +334,19 @@ require_run_as() {{
 cache_name() {{
   case "$1" in vk-pipeline-cache.bin*) ;; *) return 1 ;; esac
   suffix=${{1#vk-pipeline-cache.bin}}
+  case "$suffix" in *.sg32-v1) suffix=${{suffix%.sg32-v1}} ;; esac
+  case "$suffix" in
+    *.sgstage-v1-*)
+      masks=${{suffix##*.sgstage-v1-}}
+      stages=${{masks%%-*}}
+      operations=${{masks#*-}}
+      [ "$masks" != "$operations" ] || return 1
+      case "$stages" in ""|0?*|*[!0-9a-f]*) return 1 ;; esac
+      case "$operations" in ""|0?*|*[!0-9a-f]*) return 1 ;; esac
+      [ "${{#stages}}" -le 8 ] && [ "${{#operations}}" -le 8 ] || return 1
+      suffix=${{suffix%.sgstage-v1-*}}
+      ;;
+  esac
   case "$suffix" in *.nan-v1) suffix=${{suffix%.nan-v1}} ;; esac
   case "$suffix" in *.vary-v1) suffix=${{suffix%.vary-v1}} ;; esac
   case "$suffix" in *.intfold-v1) suffix=${{suffix%.intfold-v1}} ;; esac

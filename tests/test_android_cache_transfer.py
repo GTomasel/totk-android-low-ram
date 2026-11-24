@@ -199,6 +199,9 @@ class AndroidCacheTransferTests(unittest.TestCase):
             '.intfold-v1.pso-state', '.pos-v1-00', '.pos-v1-10.pos-v1-01',
             '.intfold-v1.pos-v1-10', '.intfold-v1.intfold-v1',
             '.vary-v1.intfold-v1', '.nan-v1.vary-v1', '.vary-v1.vary-v1', '.nan-v1.nan-v1',
+            '.sgstage-v1-20', '.sgstage-v1-20-', '.sgstage-v1--67f', '.sgstage-v1-20-xyz',
+            '.sgstage-v1-20-67f-ff', '.sgstage-v1-20-123456789', '.sgstage-v1-020-67f', '.sg32-v1.sgstage-v1-20-67f',
+            '.sgstage-v1-20-67f.nan-v1', '.sg32-v1.sg32-v1',
             '.' + 'a' * 63, '.' + 'a' * 65, '.' + 'A' * 64,
             '.' + 'g' * 64, '.unrecognized')]
         invalid += ['vk-pipeline-cache-20260101-000000.bin', 'custom-cache.bin', 'unrelated']
@@ -216,6 +219,19 @@ class AndroidCacheTransferTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('refusing to guess or relabel its arm', result.stderr)
                 self.assertFalse(self.staged(name).exists())
+
+    def test_subgroup_policy_namespace_round_trips_under_original_basename(self):
+        names = [BASE + suffix for suffix in (
+            '.sgstage-v1-20-67f', '.sg32-v1', '.sgstage-v1-0-0.sg32-v1',
+            '.' + '0123456789abcdef' * 4 + '.pos-v1-11.intfold-v1.vary-v1.nan-v1.sgstage-v1-20-67f.sg32-v1')]
+        for name in names:
+            self.cached(name, PAYLOAD + name.encode())
+        folder, _ = self.export()
+        self.assertEqual({path.name for path in folder.iterdir()}, set(names))
+        result = self.invoke('cache-import', *(folder / name for name in names))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for name in names:
+            self.assertEqual(self.staged(name).read_bytes(), PAYLOAD + name.encode())
 
     def test_import_still_works_for_release_without_run_as(self):
         source = self.output / (BASE + '.intfold-v1')

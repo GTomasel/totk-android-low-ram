@@ -29,8 +29,15 @@ uint64_t host_now_ns(void);
 #define LOGV(...) do { fprintf(stderr, "[nvn-vk] " __VA_ARGS__); fputc('\n', stderr); } while (0)
 #define DIE(...) do { LOGV(__VA_ARGS__); fflush(stderr); abort(); } while (0)
 /* A failed Vulkan call is fatal; device lost is also named in the app's menu (runtime/game_error.h) before the abort. */
+#if defined(__ANDROID__) && defined(TOTK_ANDROID_APP)
+_Noreturn void vk_android_abort_result(VkResult result);
+void vk_android_memory_frame(uint64_t frame);
+#else
+static inline _Noreturn void vk_android_abort_result(VkResult result) { (void)result; abort(); }
+static inline void vk_android_memory_frame(uint64_t frame) { (void)frame; }
+#endif
 #define VK_DIE_RESULT(r, ...) do { LOGV(__VA_ARGS__); fflush(stderr); \
-    if ((r) == VK_ERROR_DEVICE_LOST) runtime_android_game_error(RUNTIME_GAME_ERROR_GPU_LOST); abort(); } while (0)
+    vk_android_abort_result(r); } while (0)
 #define VKCHECK(call) do { VkResult r_ = (call); if (r_) VK_DIE_RESULT(r_, "%s failed: %d", #call, r_); } while (0)
 /* Mandatory CPU storage must fail at its allocation site, never publish NULL into a packet/log.
    Optional guard collection keeps its existing fail-closed return paths instead. */

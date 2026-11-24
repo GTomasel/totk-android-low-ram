@@ -51,6 +51,7 @@ static struct { unsigned max, sets, capacity[8], used[8]; int alive; } pool[2048
 static unsigned next_pool, destroyed, next_set, full_pools;
 #define VK_REALLOC realloc
 #define DIE(...) abort()
+#define VK_DIE_RESULT(result, ...) abort()
 #define VKCHECK(call) assert((call) == 0)
 #define HK_ADD(...) ((void)0)
 #define LOGV(...) ((void)0)

@@ -24,6 +24,7 @@
 #include "vk_seed_io.h"
 #include "vk_load_proof.h"
 #include "vk_subgroup.h"
+#include "vk_subgroup_stage.h"
 #include "vk_position.h"
 #include "vk_varyings.h"
 #include "vk_int_fold.h"
@@ -103,7 +104,7 @@ static void seed_init(void) {
 static const char *seed_dir(void) { pthread_once(&g_seed_once, seed_init); return g_seed_dir; }
 /* Every rewrite policy namespaces default and explicit cache/import paths.
    All policies off retains legacy paths. Caller owns out. */
-static const char *cache_policy_path(const char *base, char *out, size_t size, unsigned policy) {
+static const char *cache_policy_path(const char *base, char *out, size_t size, unsigned policy, int pipeline) {
     pthread_once(&g_seed_once, seed_init);
     pthread_once(&g_position_once, position_init);
     pthread_once(&g_int_fold_once, int_fold_init);
@@ -111,14 +112,23 @@ static const char *cache_policy_path(const char *base, char *out, size_t size, u
     const char *suffix = vk_position_cache_suffix(g_position_policy);
     const char *fold = policy & 4 ? ".intfold-v1" : "";
     const char *vary = policy & 2 ? ".vary-v1" : "", *nan = policy & 1 ? ".nan-v1" : "";
-    int n = g_seed_default ? snprintf(out, size, "%s%s%s%s%s", base, suffix, fold, vary, nan) :
-        snprintf(out, size, "%s.%s%s%s%s%s", base, g_seed_tag, suffix, fold, vary, nan);
+    const VkShaderStageFlags stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT;
+    const VkSubgroupFeatureFlags operations = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_VOTE_BIT |
+        VK_SUBGROUP_FEATURE_BALLOT_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_BIT | VK_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT;
+    char subgroup[40] = {0};
+    if (pipeline && V.pd && ((V.subgroup.supportedStages & stages) != stages ||
+            (V.subgroup.supportedOperations & operations) != operations))
+        snprintf(subgroup, sizeof subgroup, ".sgstage-v1-%x-%x",
+            V.subgroup.supportedStages, V.subgroup.supportedOperations);
+    const char *logical = pipeline && V.subgroup_fix ? ".sg32-v1" : "";
+    int n = g_seed_default ? snprintf(out, size, "%s%s%s%s%s%s%s", base, suffix, fold, vary, nan, subgroup, logical) :
+        snprintf(out, size, "%s.%s%s%s%s%s%s%s", base, g_seed_tag, suffix, fold, vary, nan, subgroup, logical);
     return n >= 0 && (size_t)n < size ? out : NULL;
 }
 const char *vk_shader_cache_path(const char *base, char *out, size_t size) {
     pthread_once(&g_position_once, position_init);
     pthread_once(&g_int_fold_once, int_fold_init);
-    return cache_policy_path(base, out, size, (g_int_fold ? 4u : 0) | (g_varying_fix ? 2u : 0) | (g_nan_minmax ? 1u : 0));
+    return cache_policy_path(base, out, size, (g_int_fold ? 4u : 0) | (g_varying_fix ? 2u : 0) | (g_nan_minmax ? 1u : 0), 1);
 }
 /* Prefer predecessors with a subset of the current rewrites, then other switch arms.
  * Never cross seed/content or position identity. No directory scan or guessed filename stripping. */
@@ -128,14 +138,17 @@ const char *vk_shader_cache_predecessor(const char *base, unsigned index, char *
     unsigned current = (g_int_fold ? 4u : 0) | (g_varying_fix ? 2u : 0) | (g_nan_minmax ? 1u : 0);
     for (unsigned siblings = 0; siblings < 2; siblings++) for (int policy = 7; policy >= 0; policy--) {
         if ((unsigned)policy == current || !!((unsigned)policy & ~current) != siblings) continue;
-        if (!index--) return cache_policy_path(base, out, size, (unsigned)policy);
+        if (!index--) return cache_policy_path(base, out, size, (unsigned)policy, 1);
     }
     return NULL;
 }
 static void seed_io_start(void) {
     char path[1100];
     mkdir("state", 0700);
-    vk_seed_io_start(seed_dir(), vk_shader_cache_path("state/vk-seed-used.txt", path, sizeof path));
+    pthread_once(&g_position_once, position_init);
+    pthread_once(&g_int_fold_once, int_fold_init);
+    unsigned policy = (g_int_fold ? 4u : 0) | (g_varying_fix ? 2u : 0) | (g_nan_minmax ? 1u : 0);
+    vk_seed_io_start(seed_dir(), cache_policy_path("state/vk-seed-used.txt", path, sizeof path, policy, 0));
 }
 static int g_seed_ok = -1;
 int vk_shaders_ready(void) {
@@ -466,7 +479,30 @@ static int shader_postprocess(vk_shader *sh, char **data, size_t *length) {
             sh->load_full_outputs=0;
         }
     }
-    if (V.subgroup_fix) {
+    VkShaderStageFlags stage = stage_flags(sh->stage);
+    uint32_t supported = (V.subgroup.supportedStages & stage) ? V.subgroup.supportedOperations : 0;
+    supported &= 0xffu; /* Optional partition and rotate features are not enabled on this device. */
+    if (stage == VK_SHADER_STAGE_VERTEX_BIT && !V.subgroup.quadOperationsInAllStages)
+        supported &= ~VK_SUBGROUP_FEATURE_QUAD_BIT;
+    size_t wg = spv_len / 4;
+    uint32_t *module = (uint32_t *)spv, required = 0;
+    const vk_sg_counter_contract *counter = stage == VK_SHADER_STAGE_FRAGMENT_BIT ? vk_sg_counter_for_variant(variant) : NULL;
+    int compatibility = vk_spirv_stage_subgroups(&module, &wg, supported, counter, &required);
+    spv = (char *)module;
+    spv_len = wg * 4;
+    if (compatibility < 0) {
+        SHADER_RED(64, "subgroup shader %s: %s stage 0x%x requires operations=0x%x; device stages=0x%x operations=0x%x; no compatible lowering, draw/dispatch skipped",
+            variant, sh->stage == 0 ? "vertex" : sh->stage == 1 ? "fragment" : "compute", stage,
+            required, V.subgroup.supportedStages, V.subgroup.supportedOperations);
+        result = -2; /* Re-running the same translator would recreate this incompatible module. */
+        goto done;
+    }
+    if (compatibility == 1)
+        LOGV("subgroup shader %s: stage=0x%x uses singleton visibility counter for unsupported operations=0x%x",
+            variant, stage, required & ~supported);
+    else if (compatibility == 2)
+        LOGV("subgroup shader %s: stage=0x%x unused subgroup input removed", variant, stage);
+    if (compatibility == 0 && V.subgroup_fix) {
         size_t nw = spv_len / 4; uint32_t *words = (uint32_t *)spv;
         int fixed = vk_spirv_subgroup32(&words, &nw);
         spv = (char *)words; spv_len = nw * 4;
@@ -492,7 +528,7 @@ done:
     *data = spv; *length = spv_len; return result;
 #undef SHADER_RED
 }
-static vk_shader *shader_load(const char *variant, int early_tests) {
+static vk_shader *shader_load(const char *variant, int early_tests, bool *incompatible) {
     pthread_once(&g_position_once, position_init);
     pthread_once(&g_int_fold_once, int_fold_init);
     shader_key key = {0}; snprintf(key.variant, sizeof key.variant, "%s", variant);
@@ -562,7 +598,9 @@ static vk_shader *shader_load(const char *variant, int early_tests) {
         if (b->kind == RB_IMG) { if (b->reg >= 0 && b->reg < 32) sh->native_img_mask |= 1u << b->reg; }
         else if (b->reg >= 0 && b->reg < 128) sh->native_tex_mask[b->reg/64] |= 1ull << (b->reg&63);
     }
-    if (shader_postprocess(sh, &spv, &spv_len) < 0) {
+    int postprocess = shader_postprocess(sh, &spv, &spv_len);
+    if (postprocess < 0) {
+        if (incompatible && postprocess == -2) *incompatible = true;
         free(spv); free(sh->b); free(sh->c1); free(sh); return NULL;
     }
     if (g_varying_fix) {
@@ -593,7 +631,7 @@ static vk_shader *shader_load(const char *variant, int early_tests) {
 vk_shader *vk_shader_alpha(vk_shader *base, unsigned func) {
     if (!base || base->stage!=1 || !func || func==NVN_ALPHA_FUNC_ALWAYS) return base;
     if (func>NVN_ALPHA_FUNC_GEQUAL) return NULL;
-    return shader_load(base->key,base->early_tests | (int)(func<<1));
+    return shader_load(base->key,base->early_tests | (int)(func<<1), NULL);
 }
 /* Startup/replay only: exact persisted or program-known variant; shader/layout maps
    remain single-owner even though compute driver calls run on a worker. */
@@ -602,7 +640,7 @@ vk_shader *vk_shader_seed(const char *variant, int stage, int early_tests) {
     if (n != 64 && n != 77) return NULL;
     for (size_t i = 0; i < n; i++) if (i == 64 ? variant[i] != '-' : hexval(variant[i]) < 0) return NULL;
     if (early_tests<0 || early_tests>15 || (stage!=1 && early_tests)) return NULL;
-    vk_shader *s = shader_load(variant,stage==1 ? early_tests : 0);
+    vk_shader *s = shader_load(variant,stage==1 ? early_tests : 0, NULL);
     return s && s->stage == stage ? s : NULL;
 }
 
@@ -886,8 +924,10 @@ int vk_prog_resolve(const prog_t *p, vk_shader *out[6]) {
             answers_t a; answers_of(st, &a);
             variant_list *vl = variants_of(pr->key[st]);
             vk_shader *sh = NULL;
-            for (int i = 0; i < vl->n && !sh; i++) if (deps_match(vl->v[i].deps, &a)) sh = shader_load(vl->v[i].name, vk_nvn_early_tests(pr->ctl[st], ctl_key_len(pr->ctl[st]), st));
-            if (!sh) request_miss(pr->key[st], st, pr->ctl[st], pr->code[st], &a);
+            bool incompatible = false;
+            for (int i = 0; i < vl->n && !sh; i++) if (deps_match(vl->v[i].deps, &a))
+                sh = shader_load(vl->v[i].name, vk_nvn_early_tests(pr->ctl[st], ctl_key_len(pr->ctl[st]), st), &incompatible);
+            if (!sh && !incompatible) request_miss(pr->key[st], st, pr->ctl[st], pr->code[st], &a);
             if (pr->nalt[st] == pr->capalt[st]) { pr->capalt[st] = pr->capalt[st] ? 2 * pr->capalt[st] : 2; pr->alt[st] = realloc(pr->alt[st], (size_t)pr->capalt[st] * sizeof *pr->alt[st]); }
             pr->alt[st][pr->nalt[st]++] = (alt_t){sg, sh, !sh};
             hit = &pr->alt[st][pr->nalt[st] - 1];

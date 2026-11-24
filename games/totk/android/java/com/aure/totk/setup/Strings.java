@@ -325,8 +325,8 @@ final class Strings {
     static final String DEBUG_ENTRY_HINT = "Compatibility tests, experimental overrides and launch logs";
     static final String DEBUG_RESTART_TO_APPLY = "Restart the game to apply advanced changes.";
     static final String DEBUG_APPLIES_NEXT_LAUNCH = "Applies on the next launch.";
-    static final String DEBUG_TEST_STEPS = "Start the game once with all advanced options at Default. Then change one option per launch. "
-            + "Keep earlier selections to test combinations. Export the launch log after your last attempt.";
+    static final String DEBUG_TEST_STEPS = "For a crash report, launch once with your current settings and export the log. "
+            + "Change one setting at a time when comparing a specific option.";
     static final String DEBUG_GROUP_COMPATIBILITY = "Compatibility";
     static final String DEBUG_GROUP_RENDERING = "Rendering";
     static final String DEBUG_GROUP_PERFORMANCE = "Performance";
@@ -340,8 +340,8 @@ final class Strings {
     static final String DEBUG_FRAME_GEN_LOCKED = "Frame generation is on. This choice is saved for when frame generation is off.";
     static final String DEBUG_EXPORT = "Export launch log";
     static final String DEBUG_EXPORT_HINT = "Save one totk.log with the recent attempts";
-    static final String DEBUG_EXPORT_DETAIL = "Save totk.log with up to ten recent launches. Choose where to save "
-            + "the file, then share it in your report along with what you tested.";
+    static final String DEBUG_EXPORT_DETAIL = "Save totk.log with up to ten recent launches and matching Android exit records. "
+            + "Share the file with a note about how far you got.";
     static final String DEBUG_LOG_MISSING = "No launch log yet";
     static final String DEBUG_LOG_UNAVAILABLE = "The game storage is unavailable";
     static final String DEBUG_LOG_UNREADABLE = "The launch log is unreadable";

@@ -3,6 +3,12 @@
 All notable changes to TotK Native for Android (`com.aure.totk`). The app follows [semantic versioning](https://semver.org);
 the game version it runs is shown separately. Stable builds use versionCode = major × 10000 + minor × 100 + patch.
 
+## 1.2.0-beta.3 (versionCode 10105), game 1.4.3
+
+- Check Vulkan subgroup support by shader stage and apply a compatibility path to verified fragment visibility counters when the driver lacks the required operations. Log skipped draws and dispatches for shaders that still need a compatible replacement.
+- Sample process and system memory during startup and gameplay, and capture RAM and submission details on fatal Vulkan errors. The launch-log export adds matching Android exit records when available.
+- Guide players to make one launch with their current settings and export a single log for startup crash reports.
+
 ## 1.2.0-beta.2 (versionCode 10104), game 1.4.3
 
 - Add an Advanced debugging menu for compatibility, rendering, performance and diagnostic overrides. Confirm when saved changes take effect, record launch settings, and export the combined recent launch log.
