@@ -25,6 +25,18 @@ only with root (release builds are not debuggable); developer installs made with
 A benchmark or bug report made with a `totk.env` present is not on the device's default profile: say so, or remove the
 file first (the benchmark tools warn about it, see [benchmarks](benchmarks/)).
 
+## Compare launch settings from the menu
+
+Open **Game data → Advanced debugging**. These settings let you compare compatibility, rendering, performance and logging options on a single APK. **Default** follows the ordinary profile. The menu confirms each saved change and tells you when it applies. If the game is suspended behind the menu, select **Restart game** and confirm before testing. **Reset overrides** restores the advanced defaults. A developer's `totk.env` still takes precedence.
+
+For a Retroid Pocket 5 that reports Vulkan device loss, use the bundled driver, the **Light** preset (540p), and frame generation off. Keep the save and graphics settings fixed for the batch.
+
+1. Start with **Reset overrides**, launch and note where the failure happens. Use the existing baseline log if it was captured on the same build with the same settings.
+2. Under **Compatibility**, choose **Turnip render path → Sysmem** and launch again. Reach the title and load a save if possible.
+3. Return **Turnip render path** to **Default**, choose **Presenter → Copy** and try again.
+4. Keep **Copy**, set **Turnip render path → Sysmem** again and try the combination. If a run reaches gameplay, spend a few minutes in the same area and try one transition. Note where it stopped and any rendering artifacts.
+5. After the last attempt, use **Export launch log** to save one `totk.log` containing the batch. Export before starting another batch if you need to keep more than ten attempts. Attach the log with the outcome of each attempt. The launch timestamps, driver messages and advanced settings help identify each run.
+
 ## Private update source for device tests
 
 `<filesDir>/update-source.txt` is an optional, root-written file containing only a base origin, for example

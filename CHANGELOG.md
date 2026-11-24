@@ -5,6 +5,7 @@ the game version it runs is shown separately. Stable builds use versionCode = ma
 
 ## Unreleased
 
+- Add an Advanced debugging menu for compatibility, rendering, performance and diagnostic overrides. Confirm when saved changes take effect, record launch settings, and export the combined recent launch log.
 - Reduce the overhead of opt-in frame timing. Timeline and fence producers try their diagnostic locks once, report contention losses, and batch recorder draw and descriptor counts per assembled slot. Timeline-only launches reuse existing per-walk elapsed timing. Category timing still requires the full recorder profiler.
 
 ## 1.2.0-beta.1 (versionCode 10103), game 1.4.3

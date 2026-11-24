@@ -29,6 +29,11 @@ import android.os.Looper;
 import android.os.SystemClock;
 import android.os.storage.StorageManager;
 import android.os.storage.StorageVolume;
+import android.provider.DocumentsContract;
+import android.system.ErrnoException;
+import android.system.Os;
+import android.system.OsConstants;
+import android.system.StructStat;
 import android.text.SpannableString;
 import android.text.TextUtils;
 import android.text.style.UnderlineSpan;
@@ -44,6 +49,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import android.widget.Toast;
 import com.aure.totk.GameLaunch;
 import com.aure.totk.GameControlService;
 import com.aure.totk.UpdateRules;
@@ -52,6 +58,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -83,11 +90,13 @@ public final class SetupActivity extends Activity implements SetupService.Listen
     static final String EXTRA_UPDATE_AUTH = "com.aure.totk.setup.UPDATE_AUTH";
     private static final String[] ALL_ROLES = {"romfs", "exefs", "base", "update", "keys"};
     private static final int REQ_PICK = 100, REQ_DRIVER = 900, REQ_NOTIFY = 901, REQ_EXPORT = 902, REQ_IMPORT_ZIP = 903, REQ_IMPORT_TREE = 904, REQ_MIRROR = 905,
-            REQ_DATA_FOLDER = 906, REQ_ACCESS = 907, REQ_MODS_ZIP = 909, REQ_MODS_TREE = 910, REQ_LSFG = 911;
+            REQ_DATA_FOLDER = 906, REQ_ACCESS = 907, REQ_MODS_ZIP = 909, REQ_MODS_TREE = 910, REQ_LSFG = 911, REQ_DEBUG_EXPORT = 912;
+    private static final String DEBUG_LOG_PICKER = "debug-log-picker";
+    private static final String DEBUG_LOG_NAME = "totk.log";
     private static final String[] TABS = {Settings.PERFORMANCE, Settings.PICTURE, Settings.SCREEN};
 
     private enum Screen { WELCOME, SETUP_STORAGE, ROUTE, FILES, UPDATES, UPDATE_DOWNLOAD, INSTALL, ERROR, INTERRUPTED, HOME, GRAPHICS, CONTROLS, DATA, STORAGE, ABOUT, LICENSES,
-        LICENSE_TEXT, CONFIRM_DELETE, SAVE_ERROR, SAVES, BACKUPS, SAVE_IMPORT, SAVE_CONFLICT, CHOICE }
+        LICENSE_TEXT, CONFIRM_DELETE, SAVE_ERROR, SAVES, BACKUPS, SAVE_IMPORT, SAVE_CONFLICT, CHOICE, ADVANCED_DEBUG, ADVANCED_OPTIONS }
 
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
@@ -103,6 +112,8 @@ public final class SetupActivity extends Activity implements SetupService.Listen
     private boolean setupFinished;
     private boolean ui, playAfterStop, busy;
     private boolean sharingDetails;
+    private AdvancedSettings.Group advancedGroup = AdvancedSettings.Group.COMPATIBILITY;
+    private boolean debugLogPicker, exportingDebugLog;
     private String note = "", licence = "";
     private String gameError;
     /** D-pad focus to restore when navigating back to a screen (by view tag). */
@@ -326,16 +337,21 @@ public final class SetupActivity extends Activity implements SetupService.Listen
     }
     private void gameBanner() {
         boolean graphics = screen == Screen.GRAPHICS;
-        if (gameState.free() || (!graphics && gameControls.isEmpty() && blockedAction == null)) return;
-        if (!graphics && blockedAction == null) blockedNeed = screen == Screen.FILES || screen == Screen.ERROR || screen == Screen.INTERRUPTED ? "Installing"
+        boolean restart = graphics || advancedDebugScreen();
+        if (gameState.free() || (!restart && gameControls.isEmpty() && blockedAction == null)) return;
+        if (!restart && blockedAction == null) blockedNeed = screen == Screen.FILES || screen == Screen.ERROR || screen == Screen.INTERRUPTED ? "Installing"
                 : screen == Screen.STORAGE ? "Moving game data" : screen == Screen.DATA ? "Changing game data" : "Changing saves";
         gameNotice = Theme.paragraph(this, "", 18, Theme.AMBER);
         gameNotice.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         board.put(gameNotice, 80, 930, 1360, 70);
-        closeGameAction = new Widgets.Action(this, graphics ? Strings.RESTART_GAME : Strings.CLOSE_GAME, false,
-                v -> { if (graphics) confirmGameRestart(); else closeGame(); });
-        closeGameAction.setTag(graphics ? "restart-game" : "close-game");
-        board.put(closeGameAction, 1840, graphics ? 914 : 930,
+        closeGameAction = new Widgets.Action(this, restart ? Strings.RESTART_GAME : Strings.CLOSE_GAME, false,
+                v -> {
+                    if (graphics) confirmGameRestart();
+                    else if (restart) confirmGameRestart(Strings.ADVANCED_DEBUG);
+                    else closeGame();
+                });
+        closeGameAction.setTag(restart ? "restart-game" : "close-game");
+        board.put(closeGameAction, 1840, restart ? 914 : 930,
                 Widgets.Board.WRAP, Widgets.Board.WRAP, Widgets.Board.END, Widgets.Board.START);
         if (blockedAction == null && screen == Screen.FILES) { blockedAction = () -> go(Screen.UPDATES); blockedNeed = "Installing"; }
         updateGameNotice();
@@ -345,6 +361,7 @@ public final class SetupActivity extends Activity implements SetupService.Listen
             String message;
             if (closingGame) message = closeSent ? Strings.CLOSING_GAME : Strings.WAITING_SAVE;
             else if (gameState.state == GameLock.State.ERROR) message = Strings.gameLockError(gameState.reason);
+            else if (advancedDebugScreen()) message = Strings.DEBUG_RESTART_TO_APPLY;
             else message = screen == Screen.GRAPHICS ? Strings.GRAPHICS_NEXT_START : Strings.gameRunning(blockedNeed);
             if (!message.contentEquals(gameNotice.getText())) gameNotice.setText(message);
         }
@@ -354,8 +371,11 @@ public final class SetupActivity extends Activity implements SetupService.Listen
         }
     }
     private void confirmGameRestart() {
+        confirmGameRestart(Strings.GRAPHICS);
+    }
+    private void confirmGameRestart(String title) {
         if (closingGame || gameState.state != GameLock.State.GAME) return;
-        openChoice("gfx", Strings.GRAPHICS, Strings.RESTART_CONFIRM, Strings.RESTART_PROGRESS_WARNING,
+        openChoice("gfx", title, Strings.RESTART_CONFIRM, Strings.RESTART_PROGRESS_WARNING,
                 new Object[]{"restart:no", Strings.CANCEL, null, false, (Runnable) this::back},
                 new Object[]{"restart:yes", Strings.RESTART_GAME, null, true, (Runnable) this::restartGame});
     }
@@ -581,12 +601,11 @@ public final class SetupActivity extends Activity implements SetupService.Listen
     }
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
-        boolean settingsShortcut = getIntent().getBooleanExtra(EXTRA_SETTINGS, false);
+        debugLogPicker = state != null && state.getBoolean(DEBUG_LOG_PICKER);
+        boolean settingsShortcut = debugLogPicker || getIntent().getBooleanExtra(EXTRA_SETTINGS, false);
         gameError = getIntent().getStringExtra(EXTRA_GAME_ERROR);
-        if (reuseMenuTask(getIntent())) return;
-        if (settingsOverGame(getIntent())) return;
-        if (moveSettingsToMain(getIntent())) return;
-        if (returnToRunningGame(getIntent())) return;
+        if (!debugLogPicker && (reuseMenuTask(getIntent()) || settingsOverGame(getIntent())
+                || moveSettingsToMain(getIntent()) || returnToRunningGame(getIntent()))) return;
         bindVisibleGame();
         // After a game error the menu is shown (with the reason) even when it is set to start the game directly.
         if (gameError == null && !settingsShortcut && !getIntent().getBooleanExtra(EXTRA_UPDATE, false) && pendingUpdate() == null
@@ -606,6 +625,14 @@ public final class SetupActivity extends Activity implements SetupService.Listen
             return;
         }
         showUi();
+        if (debugLogPicker && screen != Screen.INSTALL && screen != Screen.CHOICE && screen != Screen.UPDATE_DOWNLOAD) {
+            go(Screen.DATA);
+            go(Screen.ADVANCED_DEBUG);
+        }
+    }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putBoolean(DEBUG_LOG_PICKER, debugLogPicker);
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
@@ -975,8 +1002,9 @@ public final class SetupActivity extends Activity implements SetupService.Listen
     private boolean menuScreen() {
         return screen == Screen.HOME || screen == Screen.GRAPHICS || screen == Screen.CONTROLS || screen == Screen.DATA || screen == Screen.STORAGE
                 || screen == Screen.ABOUT || screen == Screen.LICENSES || screen == Screen.LICENSE_TEXT || screen == Screen.SAVE_ERROR
-                || screen == Screen.SAVES || screen == Screen.BACKUPS;
+                || screen == Screen.SAVES || screen == Screen.BACKUPS || advancedDebugScreen();
     }
+    private boolean advancedDebugScreen() { return screen == Screen.ADVANCED_DEBUG || screen == Screen.ADVANCED_OPTIONS; }
     private void plus() {
         if (menuScreen()) startGame();
         else if (screen == Screen.FILES && installAction != null && installAction.isEnabled()) installAction.performClick();
@@ -1025,7 +1053,7 @@ public final class SetupActivity extends Activity implements SetupService.Listen
             case HOME: return 7;
             case GRAPHICS: return tab.equals(Settings.PERFORMANCE) ? 11 : tab.equals(Settings.PICTURE) ? 23 : 31;
             case CONTROLS: return 19;
-            case DATA: case CONFIRM_DELETE: case STORAGE: return 29;
+            case DATA: case CONFIRM_DELETE: case STORAGE: case ADVANCED_DEBUG: case ADVANCED_OPTIONS: return 29;
             case SAVES: case BACKUPS: case SAVE_IMPORT: case SAVE_CONFLICT: case CHOICE: return 13;
             case ABOUT: case LICENSES: case LICENSE_TEXT: return 37;
             case INSTALL: return 53;
@@ -1060,6 +1088,8 @@ public final class SetupActivity extends Activity implements SetupService.Listen
             case GRAPHICS: graphics(); break;
             case CONTROLS: controls(); break;
             case DATA: data(); break;
+            case ADVANCED_DEBUG: advancedDebug(); break;
+            case ADVANCED_OPTIONS: advancedOptions(); break;
             case ABOUT: about(); break;
             case LICENSES: licences(); break;
             case LICENSE_TEXT: licenceText(); break;
@@ -1119,7 +1149,7 @@ public final class SetupActivity extends Activity implements SetupService.Listen
     private Widgets.Prompt prompt(String key, String label, View.OnClickListener click) { return new Widgets.Prompt(this, key, label, click); }
     private Widgets.Prompt backPrompt() { return prompt("B", Strings.P_BACK, v -> back()); }
     private Widgets.Prompt startPrompt() {
-        String label = screen == Screen.GRAPHICS && gameState.state == GameLock.State.GAME ? Strings.P_RESUME_GAME : Strings.P_START;
+        String label = (screen == Screen.GRAPHICS || advancedDebugScreen()) && gameState.state == GameLock.State.GAME ? Strings.P_RESUME_GAME : Strings.P_START;
         Widgets.Prompt start = prompt("+", label, v -> startGame());
         start.setEnabled(!closingGame && InstallState.read(this).playable() && !seedRefused);
         return start;
@@ -1614,6 +1644,9 @@ public final class SetupActivity extends Activity implements SetupService.Listen
         reset.dimmed(missing || !driver.isFile());
         gameControl(driverRow, "Changing the driver", this::pickDriver);
         gameControl(reset, "Changing the driver", this::resetDriver);
+        int advancedCount = SettingsStore.loadAdvanced(this).count();
+        dataRow(list, "advanced-debug", Strings.ADVANCED_DEBUG, Strings.DEBUG_ENTRY_HINT,
+                Strings.debugCount(advancedCount), advancedCount == 0 ? Theme.TEXT3 : Theme.ZONAI, v -> go(Screen.ADVANCED_DEBUG));
         // Mods live in the app's private files (ModImport), so they do not depend on where the game data is.
         ModImport.Summary mods = ModImport.read(getFilesDir());
         Widgets.Row modsRow = dataRow(list, "mods", Strings.MODS_ROW, Strings.MODS_HINT,
@@ -1677,6 +1710,7 @@ public final class SetupActivity extends Activity implements SetupService.Listen
             case "companion": detailText.setText((SettingsStore.secondaryDisplay(this) ? "" : Strings.ART_NOT_NEEDED + ". ") + Strings.COMPANION_TEXT); break;
             case "shaders": detailText.setText(Strings.SHADERS_TEXT); break;
             case "driver": case "driver-reset": detailText.setText(Strings.DRIVER_TEXT); break;
+            case "advanced-debug": detailText.setText(Strings.DEBUG_TEST_STEPS); break;
             case "mods": {
                 detailText.setText(Strings.MODS_TEXT);
                 ModImport.Summary mods = ModImport.read(getFilesDir());
@@ -1695,6 +1729,241 @@ public final class SetupActivity extends Activity implements SetupService.Listen
         if ((id.equals("companion") || id.equals("shaders")) && !install.errorCode(id).isEmpty()) {
             detailConstraint.setText(install.errorText(id).isEmpty() ? Strings.error(install.errorCode(id)) : install.errorText(id));
             detailConstraint.setVisibility(View.VISIBLE);
+        }
+    }
+
+    // ---------- launch experiments ----------
+    private void advancedDebug() {
+        AdvancedSettings advanced = SettingsStore.loadAdvanced(this);
+        LinearLayout list = advancedList(Strings.ADVANCED_DEBUG, advanced);
+        for (AdvancedSettings.Group group : AdvancedSettings.Group.values()) {
+            String title = debugGroupTitle(group), hint = debugGroupHint(group);
+            Widgets.Row row = debugAction(list, "debug:group:" + group, title, hint, null, Strings.DEBUG_TEST_STEPS, v -> {
+                advancedGroup = group;
+                go(Screen.ADVANCED_OPTIONS);
+            });
+            if (primary == null) primary = row;
+        }
+        String logState = exportingDebugLog ? Strings.DEBUG_EXPORTING : debugLogProblem(gameFile(DEBUG_LOG_NAME));
+        debugAction(list, "debug:export", Strings.DEBUG_EXPORT, Strings.DEBUG_EXPORT_HINT, logState,
+                Strings.DEBUG_EXPORT_DETAIL, v -> pickDebugLogDestination()).dimmed(exportingDebugLog);
+        debugAction(list, "debug:reset", Strings.DEBUG_RESET, Strings.DEBUG_RESET_HINT, null,
+                Strings.DEBUG_RESET_BODY, v -> confirmDebugReset()).dimmed(advanced.count() == 0);
+        debugDetail(Strings.ADVANCED_DEBUG, Strings.DEBUG_TEST_STEPS, true);
+        prompts(prompt("A", Strings.P_SELECT, v -> selectFocused()), backPrompt(), startPrompt());
+    }
+
+    private void advancedOptions() {
+        AdvancedSettings advanced = SettingsStore.loadAdvanced(this);
+        String title = debugGroupTitle(advancedGroup);
+        LinearLayout list = advancedList(title, advanced);
+        for (AdvancedSettings.Option option : AdvancedSettings.OPTIONS) {
+            if (option.group != advancedGroup) continue;
+            boolean frameGen = option.requiresNoFrameGen && settings.frameGen();
+            Widgets.Row row = listRow(list, "debug:option:" + option.key, option.label,
+                    frameGen ? Strings.DEBUG_FRAME_GEN_REQUIRED : option.description, 76, 8);
+            if (frameGen) row.hint.setTextColor(Theme.AMBER);
+            row.setFocusableInTouchMode(true);
+            Widgets.Selector selector = new Widgets.Selector(this, row);
+            row.value(selector);
+            updateDebugSelector(advanced, option, row, selector);
+            row.adjust(direction -> {
+                int current = Arrays.asList(option.values).indexOf(advanced.get(option));
+                advanced.set(option, option.values[Math.floorMod(current + direction, option.values.length)]);
+                String failed = SettingsStore.saveAdvanced(this, advanced, settings);
+                if (failed != null) {
+                    advancedStatus(Strings.DEBUG_SAVE_FAILED + ". " + failed, false);
+                    render();
+                    return;
+                }
+                updateDebugSelector(advanced, option, row, selector);
+                debugOptionDetail(advanced, option);
+                advancedStatus(frameGen && !advanced.get(option).isEmpty()
+                        ? Strings.DEBUG_SAVED_FRAME_GEN : debugSavedMessage(Strings.DEBUG_SAVED), true);
+            });
+            row.setOnClickListener(v -> { v.requestFocus(); row.step(1); });
+            row.setOnFocusChangeListener((v, has) -> { if (has) debugOptionDetail(advanced, option); });
+            if (primary == null) {
+                primary = row;
+                debugOptionDetail(advanced, option);
+            }
+        }
+        prompts(prompt("A", Strings.P_CHANGE, v -> selectFocused()), backPrompt(), startPrompt());
+    }
+
+    private LinearLayout advancedList(String title, AdvancedSettings advanced) {
+        int count = advanced.count();
+        statusChip = header("gfx", title, note.isEmpty() ? (count == 0 ? Widgets.Chip.IDLE : Widgets.Chip.OK)
+                : noteOk ? Widgets.Chip.OK : Widgets.Chip.WARN, note.isEmpty() ? Strings.debugCount(count) : note);
+        statusChip.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
+        Widgets.Panel panel = panel(80, 186, 1040, 720, false, 28, 24);
+        panel.setClipChildren(true);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        scroll.setClipToPadding(false);
+        LinearLayout list = Widgets.column(this);
+        scroll.addView(list);
+        panel.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        detailPanel();
+        detailDiagram.setVisibility(View.GONE);
+        return list;
+    }
+
+    private Widgets.Row debugAction(LinearLayout list, String tag, String title, String hint, String state,
+                                    String description, View.OnClickListener click) {
+        Widgets.Row row = listRow(list, tag, title, hint, 76, 8);
+        if (state != null) row.value(rowText(state, Theme.TEXT3));
+        row.setOnClickListener(v -> { if (!row.dimmed()) click.onClick(v); });
+        row.setOnFocusChangeListener((v, has) -> { if (has) debugDetail(title, description, !tag.equals("debug:export")); });
+        return row;
+    }
+
+    private void debugDetail(String title, String text, boolean nextStart) {
+        detailTitle.setText(title);
+        detailText.setText(text);
+        detailFacts.removeAllViews();
+        detailConstraint.setVisibility(View.GONE);
+        detailNote.setVisibility(nextStart ? View.VISIBLE : View.GONE);
+    }
+
+    private void debugOptionDetail(AdvancedSettings advanced, AdvancedSettings.Option option) {
+        debugDetail(option.label, option.description + "\n\n" + Strings.DEBUG_DEFAULT_HINT, true);
+        fact(Strings.DEBUG_SELECTED, advanced.valueLabel(option));
+        if (option.requiresNoFrameGen) {
+            detailConstraint.setText(settings.frameGen() ? Strings.DEBUG_FRAME_GEN_LOCKED : Strings.DEBUG_FRAME_GEN_REQUIRED);
+            detailConstraint.setVisibility(View.VISIBLE);
+        }
+    }
+
+    private void updateDebugSelector(AdvancedSettings advanced, AdvancedSettings.Option option, Widgets.Row row, Widgets.Selector selector) {
+        String value = advanced.valueLabel(option);
+        selector.set(value, option.values.length, Arrays.asList(option.values).indexOf(advanced.get(option)));
+        row.setContentDescription(option.label + ", " + value
+                + (option.requiresNoFrameGen && settings.frameGen() ? ". " + Strings.DEBUG_FRAME_GEN_LOCKED : ""));
+    }
+
+    private static String debugGroupTitle(AdvancedSettings.Group group) {
+        switch (group) {
+            case COMPATIBILITY: return Strings.DEBUG_GROUP_COMPATIBILITY;
+            case RENDERING: return Strings.DEBUG_GROUP_RENDERING;
+            case PERFORMANCE: return Strings.DEBUG_GROUP_PERFORMANCE;
+            case LOGGING: return Strings.DEBUG_GROUP_LOGGING;
+        }
+        throw new AssertionError(group);
+    }
+
+    private static String debugGroupHint(AdvancedSettings.Group group) {
+        switch (group) {
+            case COMPATIBILITY: return Strings.DEBUG_GROUP_COMPATIBILITY_HINT;
+            case RENDERING: return Strings.DEBUG_GROUP_RENDERING_HINT;
+            case PERFORMANCE: return Strings.DEBUG_GROUP_PERFORMANCE_HINT;
+            case LOGGING: return Strings.DEBUG_GROUP_LOGGING_HINT;
+        }
+        throw new AssertionError(group);
+    }
+
+    private void confirmDebugReset() {
+        openChoice("gfx", Strings.ADVANCED_DEBUG, Strings.DEBUG_RESET_TITLE, Strings.DEBUG_RESET_BODY,
+                new Object[]{"debug:reset:no", Strings.CANCEL, null, false, (Runnable) this::back},
+                new Object[]{"debug:reset:yes", Strings.DEBUG_RESET, null, true, (Runnable) () -> {
+                    back();
+                    String failed = SettingsStore.saveAdvanced(this, new AdvancedSettings(null), settings);
+                    advancedStatus(failed == null ? debugSavedMessage(Strings.DEBUG_RESET_DONE) : Strings.DEBUG_SAVE_FAILED + ". " + failed, failed == null);
+                    render();
+                }});
+    }
+
+    private String debugSavedMessage(String result) {
+        return result + ". " + (gameState.state == GameLock.State.GAME
+                ? Strings.DEBUG_RESTART_TO_APPLY : Strings.DEBUG_APPLIES_NEXT_LAUNCH);
+    }
+
+    private void advancedStatus(String message, boolean ok) {
+        if (isDestroyed()) return;
+        if (!advancedDebugScreen()) {
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        note = message;
+        noteOk = ok;
+        statusChip.set(ok ? Widgets.Chip.OK : Widgets.Chip.WARN, message);
+    }
+
+    private String debugLogProblem(File log) {
+        if (!StorageLocation.available(this)) return Strings.DEBUG_LOG_UNAVAILABLE;
+        try { return debugLogProblem(Os.lstat(log.getPath())); }
+        catch (ErrnoException error) { return error.errno == OsConstants.ENOENT ? Strings.DEBUG_LOG_MISSING : Strings.DEBUG_LOG_UNREADABLE; }
+    }
+
+    private static String debugLogProblem(StructStat stat) {
+        if (!OsConstants.S_ISREG(stat.st_mode)) return Strings.DEBUG_LOG_UNREADABLE;
+        return stat.st_size <= 0 ? Strings.DEBUG_LOG_MISSING : null;
+    }
+
+    private void pickDebugLogDestination() {
+        if (debugLogPicker || exportingDebugLog) return;
+        String problem = debugLogProblem(gameFile(DEBUG_LOG_NAME));
+        if (problem != null) { advancedStatus(problem, false); return; }
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/octet-stream")
+                .putExtra(Intent.EXTRA_TITLE, DEBUG_LOG_NAME);
+        try {
+            debugLogPicker = true;
+            startActivityForResult(intent, REQ_DEBUG_EXPORT);
+        } catch (ActivityNotFoundException | SecurityException missing) {
+            debugLogPicker = false;
+            advancedStatus(Strings.PICKER_MISSING, false);
+        }
+    }
+
+    private void writeDebugLog(Uri destination) {
+        File log = gameFile(DEBUG_LOG_NAME);
+        ContentResolver resolver = getContentResolver();
+        exportingDebugLog = true;
+        advancedStatus(Strings.DEBUG_EXPORTING, true);
+        saveWorker.execute(() -> {
+            String result = copyDebugLog(log, resolver, destination);
+            if (result != null) try { DocumentsContract.deleteDocument(resolver, destination); } catch (Exception leftover) { }
+            main.post(() -> {
+                exportingDebugLog = false;
+                advancedStatus(result == null ? Strings.DEBUG_EXPORTED : result, result == null);
+                if (!isDestroyed() && screen == Screen.ADVANCED_DEBUG) render();
+            });
+        });
+    }
+
+    private String copyDebugLog(File log, ContentResolver resolver, Uri destination) {
+        FileDescriptor source = null;
+        try {
+            if (!StorageLocation.available(this)) return Strings.DEBUG_LOG_UNAVAILABLE;
+            // A picked game folder can change while the document picker is open. Validate the opened file and
+            // freeze its length so compaction or writes in a later launch cannot change the exported history.
+            source = Os.open(log.getPath(), OsConstants.O_RDONLY | OsConstants.O_NOFOLLOW | OsConstants.O_NONBLOCK | OsConstants.O_CLOEXEC, 0);
+            StructStat stat = Os.fstat(source);
+            String problem = debugLogProblem(stat);
+            if (problem != null) return problem;
+            long remaining = stat.st_size;
+            try (OutputStream out = resolver.openOutputStream(destination, "wt")) {
+                if (out == null) throw new IOException("Document provider did not open the destination");
+                byte[] buffer = new byte[64 * 1024];
+                while (remaining > 0) {
+                    int read = Os.read(source, buffer, 0, (int) Math.min(remaining, buffer.length));
+                    if (read <= 0) throw new IOException("Launch log changed during export");
+                    out.write(buffer, 0, read);
+                    remaining -= read;
+                }
+            }
+            return null;
+        } catch (ErrnoException error) {
+            if (error.errno == OsConstants.ENOENT) return Strings.DEBUG_LOG_MISSING;
+            android.util.Log.w("totk", Strings.DEBUG_LOG_UNREADABLE, error);
+            return Strings.DEBUG_LOG_UNREADABLE;
+        } catch (IOException | RuntimeException error) {
+            android.util.Log.w("totk", Strings.DEBUG_EXPORT_FAILED, error);
+            return Strings.DEBUG_EXPORT_FAILED;
+        } finally {
+            if (source != null) try { Os.close(source); } catch (ErrnoException error) {
+                android.util.Log.w("totk", "Could not close the launch log", error);
+            }
         }
     }
 
@@ -2974,6 +3243,15 @@ public final class SetupActivity extends Activity implements SetupService.Listen
     }
     @Override protected void onActivityResult(int request, int code, Intent data) {
         super.onActivityResult(request, code, data);
+        if (request == REQ_DEBUG_EXPORT) {
+            debugLogPicker = false;
+            Uri destination = data == null ? null : data.getData();
+            if (code == RESULT_CANCELED) advancedStatus(Strings.DEBUG_EXPORT_CANCELED, false);
+            else if (code != RESULT_OK || destination == null || !DocumentsContract.isDocumentUri(this, destination))
+                advancedStatus(Strings.DEBUG_EXPORT_FAILED, false);
+            else writeDebugLog(destination);
+            return;
+        }
         if (request == UpdateInstaller.REQUEST_SOURCES) { if (updater != null) updater.permissionReturned(); return; }
         if (code != RESULT_OK || data == null) return;
         if (request == REQ_DRIVER) { if (data.getData() != null) installDriver(data.getData()); return; }

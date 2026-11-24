@@ -321,6 +321,46 @@ final class Strings {
     static final String DRIVER_RESET_ROW = "Use the bundled driver";
     static final String DRIVER_RESET_HINT = "Removes the custom driver file";
     static final String DRIVER_BUNDLED = "Bundled";
+    static final String ADVANCED_DEBUG = "Advanced debugging";
+    static final String DEBUG_ENTRY_HINT = "Compatibility tests, experimental overrides and launch logs";
+    static final String DEBUG_RESTART_TO_APPLY = "Restart the game to apply advanced changes.";
+    static final String DEBUG_APPLIES_NEXT_LAUNCH = "Applies on the next launch.";
+    static final String DEBUG_TEST_STEPS = "Start the game once with all advanced options at Default. Then change one option per launch. "
+            + "Keep earlier selections to test combinations. Export the launch log after your last attempt.";
+    static final String DEBUG_GROUP_COMPATIBILITY = "Compatibility";
+    static final String DEBUG_GROUP_RENDERING = "Rendering";
+    static final String DEBUG_GROUP_PERFORMANCE = "Performance";
+    static final String DEBUG_GROUP_LOGGING = "Logging";
+    static final String DEBUG_GROUP_COMPATIBILITY_HINT = "Presenter, Turnip driver and shader workarounds";
+    static final String DEBUG_GROUP_RENDERING_HINT = "Frame timing, shared buffers and rendering paths";
+    static final String DEBUG_GROUP_PERFORMANCE_HINT = "Pipeline compilation, memory and allocation";
+    static final String DEBUG_GROUP_LOGGING_HINT = "Timing, memory and other diagnostics in totk.log";
+    static final String DEBUG_DEFAULT_HINT = "Default follows your normal graphics settings and device profile.";
+    static final String DEBUG_FRAME_GEN_REQUIRED = "Applies with frame generation off";
+    static final String DEBUG_FRAME_GEN_LOCKED = "Frame generation is on. This choice is saved for when frame generation is off.";
+    static final String DEBUG_EXPORT = "Export launch log";
+    static final String DEBUG_EXPORT_HINT = "Save one totk.log with the recent attempts";
+    static final String DEBUG_EXPORT_DETAIL = "Save totk.log with up to ten recent launches. Choose where to save "
+            + "the file, then share it in your report along with what you tested.";
+    static final String DEBUG_LOG_MISSING = "No launch log yet";
+    static final String DEBUG_LOG_UNAVAILABLE = "The game storage is unavailable";
+    static final String DEBUG_LOG_UNREADABLE = "The launch log is unreadable";
+    static final String DEBUG_EXPORTING = "Exporting launch log…";
+    static final String DEBUG_EXPORTED = "Launch log exported";
+    static final String DEBUG_EXPORT_CANCELED = "Launch log export canceled";
+    static final String DEBUG_EXPORT_FAILED = "Could not export the launch log";
+    static final String DEBUG_RESET = "Reset overrides";
+    static final String DEBUG_RESET_HINT = "Return all advanced options to Default";
+    static final String DEBUG_RESET_TITLE = "Reset all advanced overrides?";
+    static final String DEBUG_RESET_BODY = "All advanced options will follow your usual graphics settings and device defaults again.";
+    static final String DEBUG_RESET_DONE = "Advanced overrides reset";
+    static final String DEBUG_SAVED = "Advanced setting saved";
+    static final String DEBUG_SAVED_FRAME_GEN = "Saved. Turn off frame generation to apply.";
+    static final String DEBUG_SAVE_FAILED = "Could not save advanced settings";
+    static final String DEBUG_SELECTED = "Selected";
+    static String debugCount(int count) {
+        return count == 0 ? "Defaults" : count + (count == 1 ? " override" : " overrides");
+    }
     static final String MODS_ROW = "Mods";
     static final String MODS_HINT = "A TKMM merge, or a mod's folder with romfs inside";
     static final String MODS_NONE = "None";

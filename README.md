@@ -60,7 +60,9 @@ Use this repository's Releases page for updates. The built-in update checker sti
 - If you see **Setup stopped**, select **Share details** before selecting **Resume**. Save the shared text as a `.txt` file or paste it into the issue.
 - For a **crash at launch or during play**, attach `totk.log`. The file contains the latest ten launches in that game data folder, in order, with a timestamp for each. At each launch, earlier attempts are capped at 512 KiB each, retaining the start and end of long logs. The current attempt is written in full and may be larger until the next launch. Check **Game data → Storage** for the location. For the app folder on an SD card or an older install using shared internal storage, look under `Android/data/com.gtomasel.totk/files/` on that volume.
 
-If the game data is in the app's private internal storage or you cannot access the folder, capture the failure with ADB. Install [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools), enable **USB debugging** in Android's **Developer options**, connect the device by USB and accept the debugging prompt. Run `adb devices` on your computer and check that your device appears with the status `device`. Then start the capture.
+For several attempts on the same APK, use **Game data → Advanced debugging**. The selected overrides take effect on the next full game launch. After the last attempt, select **Export launch log** to save the combined log, including from private internal storage. [How to compare launch settings](docs/developer-settings.md#compare-launch-settings-from-the-menu)
+
+If a report also needs Android system messages, capture them with ADB. Install [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools), enable **USB debugging** in Android's **Developer options**, connect the device by USB and accept the debugging prompt. Run `adb devices` on your computer and check that your device appears with the status `device`. Then start the capture.
 
 ```sh
 adb logcat -b main -b system -b crash -b events -v threadtime -T 1 > totk-logcat.txt

@@ -1283,11 +1283,8 @@ static void live_ctl_start(void) {
    A refusal also honors an inherited explicit logcat opt-in; environment files are not read yet. */
 static int g_game_lock = -1;
 static int start_refused(void) { if (g_game_lock >= 0) { close(g_game_lock); g_game_lock = -1; } log_mirror_start(); return -1; }
-/* What the launcher menu may write into <private>/settings.env: the option mapping and the frame-generation timing
-   block of the settings contract, and the game data folder when it is not on the primary storage (TOTK_DATA_DIR, which
-   start_game reads before anything else), plus TOTK_AUTOLOAD for a session that writes settings.env and starts the game
-   directly (the launcher rewrites the file without it), nothing else. Any other key is a stale or foreign writer and is
-   ignored; a developer's options belong in <game>/totk.env, which is read after it and wins. */
+/* The normal settings.env contract, including the data folder read before logger setup. The bounded diagnostic choices
+   below may override these settings. A developer's totk.env is still read last. */
 static const char *const settings_keys[] = {
     "TOTK_FPS60", "TOTK_GPU_TIME", "TOTK_FRAMEGEN", "TOTK_FRAMEGEN_ENGINE", "TOTK_RENDER_RES", "TOTK_ACQUIRE_SLACK", "TOTK_POST_SCALE", "TOTK_POST_SHARPNESS",
     "TOTK_POST_SGSR_SHARPNESS", "TOTK_FXAA", "TOTK_POST_AA", "TOTK_SHADOW_RES", "TOTK_OPERATION_MODE", "TOTK_NATIVE_UI", "TOTK_ASPECT",
@@ -1305,6 +1302,75 @@ static const char *const settings_keys[] = {
 };
 static int settings_key(const char *name) {
     for (size_t i = 0; i < sizeof settings_keys / sizeof *settings_keys; i++) if (!strcmp(name, settings_keys[i])) return 1;
+    return 0;
+}
+
+/* Keep the native menu parser limited to the values AdvancedSettings can actually generate, especially for paths
+   and driver flags. The unrestricted developer file retains its existing parser. */
+static const struct { const char *name, *allowed; int list; } advanced_settings[] = {
+    {"TOTK_VK_PRESENT", "copy,ahb", 0},
+    {"TOTK_MENU_TU_DEBUG", "sysmem,gmem,nobin,nolrz,noslabcs", 1},
+    {"TOTK_VK_SUBGROUP_FIX", "0,1", 0},
+    {"TOTK_VK_VARYING_FIX", "0,1", 0},
+    {"TOTK_VK_NAN_MINMAX", "0,1", 0},
+    {"TOTK_VK_INT_FOLD", "0,1", 0},
+    {"TOTK_VK_REC_THREADS", "0,1,2,3,4", 0},
+    {"TOTK_VK_SYNC", "0,1", 0},
+    {"TOTK_VK_FRAMES_AHEAD", "1", 0},
+    {"TOTK_VK_OFF", "ds,settledwb", 1},
+    {"TOTK_FRAME_LAG", "0,1", 0},
+    {"TOTK_PRESENT_SLOTS", "0,1,auto", 0},
+    {"TOTK_ACQUIRE_CLOCK", "0,vsync", 0},
+    {"TOTK_GPU_TIME", "hardware,latency", 0},
+    {"TOTK_PRESENT_PREROTATE", "0,1", 0},
+    {"TOTK_PRESENT_UBWC", "0,1", 0},
+    {"TOTK_VK_PIPELINE_LIBRARY", "0,1", 0},
+    {"TOTK_VK_FEEDBACK_CUT", "0,1", 0},
+    {"TOTK_VK_SPLIT_PASS_DRAWS", "0,128,256,512", 0},
+    {"TOTK_VK_PIPELINE_CACHE", "0", 0},
+    {"TOTK_PSO_PREWARM", "0,1", 0},
+    {"TOTK_VK_COMPILE_THREADS", "0,1,2,4", 0},
+    {"TOTK_VK_IMAGE_FREE_EMPTY", "0,1", 0},
+    {"TOTK_VK_IMAGE_RECLAIM_BEFORE_GROW", "0,1", 0},
+    {"TOTK_VK_IMAGE_PACK", "0,1", 0},
+    {"TOTK_VK_IMAGE_BLOCK_MB", "16,32,64", 0},
+    {"TOTK_VK_STAGING_RETAIN_MB", "4,8,16,32", 0},
+    {"TOTK_VK_STAGING_BURST_TRIM", "0,1", 0},
+    {"TOTK_VK_DESC_COMPACT", "0,1", 0},
+    {"TOTK_VK_DESC_BATCH", "0,1", 0},
+    {"TOTK_WB_ALIAS", "0,1", 0},
+    {"TOTK_LOGCAT", "0,1", 0},
+    {"TOTK_FRAME_TIMELINE", "0,1", 0},
+    {"TOTK_VK_REC_PROFILE", "0,1", 0},
+    {"TOTK_VK_XLATE_STATS", "0,1", 0},
+    {"TOTK_VK_IMAGE_PEAK_LOG", "0,1", 0},
+    {"TOTK_THREAD_SAMPLER", "0,1", 0},
+    {"TOTK_INPUT_LOG", "0,1", 0},
+};
+static int environment_list_has(const char *choices, const char *value, size_t len) {
+    while (*choices) {
+        size_t n = strcspn(choices, ",");
+        if (n == len && !strncmp(choices, value, n)) return 1;
+        choices += n;
+        if (*choices) choices++;
+    }
+    return 0;
+}
+static int advanced_setting_accepts(size_t index, const char *value) {
+    const char *allowed = advanced_settings[index].allowed;
+    if (!advanced_settings[index].list) return environment_list_has(allowed, value, strlen(value));
+    int turnip = !strcmp(advanced_settings[index].name, "TOTK_MENU_TU_DEBUG"), render_path = 0;
+    do {
+        size_t n = strcspn(value, ",");
+        if (!environment_list_has(allowed, value, n)) return 0;
+        if (turnip && ((n == 6 && !strncmp(value, "sysmem", n)) || (n == 4 && !strncmp(value, "gmem", n)))) {
+            if (render_path) return 0;
+            render_path = 1;
+        }
+        value += n;
+        if (!*value) return 1;
+        value++;
+    } while (*value);
     return 0;
 }
 /* One line of an env file: 1 and NAME / value for an assignment ("export " and one level of quotes allowed), 0 for a blank
@@ -1338,7 +1404,19 @@ static void env_parse(const char *path, int menu) {
         char *s, *v = NULL; int kind = env_line(line, &s, &v);
         if (!kind) continue;
         if (kind < 0) { fprintf(stderr, "[totk-app] %s: ignored line \"%s\"\n", file, s); continue; }
-        if (menu && !settings_key(s)) { fprintf(stderr, "[totk-app] settings.env: ignored %s (not a launcher menu option)\n", s); continue; }
+        if (menu) {
+            const size_t count = sizeof advanced_settings / sizeof *advanced_settings;
+            size_t i = 0;
+            while (i < count && strcmp(s, advanced_settings[i].name)) i++;
+            if (i == count && !settings_key(s)) {
+                fprintf(stderr, "[totk-app] settings.env: ignored %s (not a launcher menu option)\n", s);
+                continue;
+            }
+            if (i < count && !advanced_setting_accepts(i, v)) {
+                fprintf(stderr, "[totk-app] settings.env: ignored %s (invalid menu value)\n", s);
+                continue;
+            }
+        }
         setenv(s, v, 1);
         if (!menu) { fprintf(stderr, "[totk-app] totk.env: %s=%s\n", s, v); continue; }
         int w = snprintf(applied + used, sizeof applied - used, " %s=%s", s, v);
@@ -1349,6 +1427,27 @@ static void env_parse(const char *path, int menu) {
 }
 static void settings_file(const char *path) { env_parse(path, 1); }
 static void env_file(const char *path) { env_parse(path, 0); }
+/* Report the launch inputs after developer overrides and Android defaults. Individual features log admission on
+   the driver separately. Values outside the menu vocabulary remain identified by the original totk.env log only. */
+static void advanced_settings_report(void) {
+    char summary[4096] = "";
+    size_t used = 0;
+    const char *turnip = getenv("TU_DEBUG");
+    if (turnip) {
+        const char *value = strlen(turnip) < 128 && !strpbrk(turnip, "\r\n") ? turnip : "<developer value>";
+        used = (size_t)snprintf(summary, sizeof summary, " TU_DEBUG=%s", value);
+    }
+    for (size_t i = 0; i < sizeof advanced_settings / sizeof *advanced_settings; i++) {
+        const char *key = advanced_settings[i].name;
+        if (!strcmp(key, "TOTK_MENU_TU_DEBUG")) continue;
+        const char *value = getenv(key);
+        if (value && advanced_setting_accepts(i, value)) {
+            int n = snprintf(summary + used, sizeof summary - used, " %s=%s", key, value);
+            if (n > 0) used += (size_t)n < sizeof summary - used ? (size_t)n : sizeof summary - used - 1;
+        }
+    }
+    fprintf(stderr, "[totk-debug] launch settings:%s\n", used ? summary : " defaults");
+}
 static void env_default(const char *name, const char *fmt, const char *a) {
     if (getenv(name)) return;
     char v[1200]; snprintf(v, sizeof v, fmt, a); setenv(name, v, 0);
@@ -1563,11 +1662,24 @@ static int android_driver_source(char *src, size_t size) {
     return DRIVER_SYSTEM;
 }
 static void android_driver_env_policy(void) {
+    /* Preserve a developer's explicit TU_DEBUG (including empty). Other Turnip menu flags may be combined
+       with the automatic Adreno 722 sysmem selection when the menu render path is Default. */
+    if (getenv("TU_DEBUG")) return;
     char src[1200];
+    if (android_driver_source(src, sizeof src) == DRIVER_SYSTEM) return;
+    const char *menu = getenv("TOTK_MENU_TU_DEBUG");
+    if (menu && !*menu) menu = NULL;
+    const char *path = menu && (environment_list_has(menu, "sysmem", 6) ||
+                                environment_list_has(menu, "gmem", 4)) ? menu : NULL;
     uint32_t chip_id;
-    if (totk_a722_sysmem_default(android_driver_source(src, sizeof src) != DRIVER_SYSTEM, getenv("TU_DEBUG"),
-            android_kgsl_chip_probe, NULL, &chip_id) && setenv("TU_DEBUG", "sysmem", 0) == 0)
-        fprintf(stderr, "[totk-app] Adreno GMEM workaround: TU_DEBUG=sysmem (early startup; KGSL chip_id=0x%08x)\n", chip_id);
+    if (totk_a722_sysmem_default(true, path, android_kgsl_chip_probe, NULL, &chip_id)) {
+        char flags[128];
+        snprintf(flags, sizeof flags, "sysmem%s%s", menu ? "," : "", menu ? menu : "");
+        if (setenv("TU_DEBUG", flags, 0) == 0)
+            fprintf(stderr, "[totk-app] Adreno GMEM workaround: TU_DEBUG=%s (early startup; KGSL chip_id=0x%08x)\n", flags, chip_id);
+    } else if (menu) {
+        setenv("TU_DEBUG", menu, 0);
+    }
 }
 
 /* Files on shared storage cannot be loaded as code, so a player's driver is copied into the app's private folder; the
@@ -1782,6 +1894,7 @@ static int start_game(const ANativeActivity *a) {
        recorder timing and fence instrumentation. The predict experiment keeps it on by default for its reports. */
     if (!strcmp(getenv("TOTK_ACQUIRE_SLACK"), "predict"))
         env_default("TOTK_FRAME_TIMELINE", "%s", "1");
+    advanced_settings_report();
     fprintf(stderr, "[totk-pace] Android policy: FPS60=%s FPS_AUTO=%s UNCAPPED=%s PACE=%s ACQUIRE_CLOCK=%s ACQUIRE_SLACK=%s PRESENT_SLOTS=%s (explicit environment overrides defaults)\n",
             getenv("TOTK_FPS60"), getenv("TOTK_FPS_AUTO"), getenv("TOTK_UNCAPPED"), getenv("TOTK_PACE"),
             getenv("TOTK_ACQUIRE_CLOCK"), getenv("TOTK_ACQUIRE_SLACK"), getenv("TOTK_PRESENT_SLOTS"));

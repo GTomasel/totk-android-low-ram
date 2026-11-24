@@ -15,7 +15,8 @@ import java.util.Map;
 final class SettingsStore {
     private SettingsStore() { }
     static final String ENV = "settings.env";
-    private static final String PREFS = "settings", SKIP_MENU = "skip_menu", INITIALIZED = "initialized";
+    private static final String PREFS = "settings", ADVANCED = "advanced_settings";
+    private static final String SKIP_MENU = "skip_menu", INITIALIZED = "initialized";
 
     static SharedPreferences prefs(Context context) { return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
     static String soc() { return Build.SOC_MODEL; }
@@ -37,6 +38,30 @@ final class SettingsStore {
         edit.putBoolean(INITIALIZED, true).apply();
         writeEnv(context, settings);
     }
+    private static SharedPreferences advancedPrefs(Context context) {
+        return context.getSharedPreferences(ADVANCED, Context.MODE_PRIVATE);
+    }
+    static AdvancedSettings loadAdvanced(Context context) {
+        return new AdvancedSettings(advancedPrefs(context).getAll());
+    }
+    private static boolean storeAdvanced(SharedPreferences prefs, AdvancedSettings advanced) {
+        SharedPreferences.Editor edit = prefs.edit();
+        for (AdvancedSettings.Option option : AdvancedSettings.OPTIONS) {
+            String value = advanced.get(option);
+            if (value.isEmpty()) edit.remove(option.key);
+            else edit.putString(option.key, value);
+        }
+        return edit.commit();
+    }
+    static synchronized String saveAdvanced(Context context, AdvancedSettings advanced, Settings settings) {
+        SharedPreferences prefs = advancedPrefs(context);
+        AdvancedSettings previous = new AdvancedSettings(prefs.getAll());
+        String failure = storeAdvanced(prefs, advanced) ? writeEnv(context, settings) : "Couldn't write preferences.";
+        if (failure != null && !storeAdvanced(prefs, previous)) {
+            Log.w("TotkMenu", "Couldn't restore advanced preferences");
+        }
+        return failure;
+    }
     static boolean skipMenu(Context context) { return prefs(context).getBoolean(SKIP_MENU, false); }
     static void skipMenu(Context context, boolean skip) { prefs(context).edit().putBoolean(SKIP_MENU, skip).apply(); }
 
@@ -45,9 +70,10 @@ final class SettingsStore {
         return list.isEmpty() ? null : list.get(0).toLanguageTag();
     }
     /** Rewrite settings.env (atomic, Settings.writeAtomic). Returns null on success, else why it failed. */
-    static String writeEnv(Context context, Settings settings) {
+    static synchronized String writeEnv(Context context, Settings settings) {
         try {
-            Settings.writeAtomic(context.getFilesDir(), ENV, settings.env(locale(), StorageLocation.envValue(context)));
+            String base = settings.env(locale(), StorageLocation.envValue(context));
+            Settings.writeAtomic(context.getFilesDir(), ENV, loadAdvanced(context).applyTo(base, settings.frameGen()));
             return null;
         } catch (IOException | SecurityException failed) {
             Log.w("TotkMenu", "settings.env not written", failed);
