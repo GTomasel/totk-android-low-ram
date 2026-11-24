@@ -4728,11 +4728,19 @@ int main(int argc, char **argv) {
         const int draws[] = {1, 17, 257, 1793};
         uint64_t walk_wall = 0, body_wall = 0, final_wall = 0, worker_busy = 0, assembly_wait = 0;
         uint64_t walking_wait = 0, body_wait = 0, slot_sum = 0;
+#ifdef TOTK_FRAME_TIMELINE_TEST
+        uint64_t timeline_descriptors = 0;
+#endif
         rn = 0;
         for (int round = 0; round < 12; round++) {
 #ifdef TOTK_FRAME_TIMELINE_TEST
+            uint64_t ft_frame = totk_ft_on() ? totk_ft_current() : 0;
             totk_ft_record ft_before = {0};
-            if (totk_ft_on()) totk_ft_snapshot(totk_ft_current(), &ft_before);
+            uint64_t desc_before[8];
+            if (ft_frame) {
+                totk_ft_snapshot(ft_frame, &ft_before);
+                vk_record_test_descriptors(desc_before);
+            }
 #endif
             uint64_t busy0, busy1, assembly0, assembly1; vk_record_test_timing(&busy0, &assembly0);
             vk_record_test_counts count0, count1; vk_record_test_counts_get(&count0);
@@ -4782,6 +4790,11 @@ int main(int argc, char **argv) {
             uint64_t wait0 = vk_record_test_walk_wait(), slot0 = mtl_last_fence();
             uint64_t walk_start = host_now_ns();
             mtl_sub_begin(); mtl_sub_snapshot_ubos_cap(&recording, 1, NULL);
+#ifdef TOTK_FRAME_TIMELINE_TEST
+            /* Advance the global frame after the walk captures its owner. Every
+               recorder chunk still belongs to that walk while it executes and assembles. */
+            if (ft_frame) totk_ft_present(ft_frame, 33333333, host_now_ns());
+#endif
             fub[0] = -100; /* packets must use submission snapshots plus each draw's inline update */
             mtl_exec((const uint8_t *)&entry); rn = 0; uint64_t body_end = host_now_ns();
             uint64_t wait_body = vk_record_test_walk_wait();
@@ -4793,14 +4806,29 @@ int main(int argc, char **argv) {
             CHECK(mtl_wait(fence, 5000000000ull), "identity round %d completes", round);
             vk_record_test_counts_get(&count1);
 #ifdef TOTK_FRAME_TIMELINE_TEST
-            if (totk_ft_on()) {
-                totk_ft_record record;
-                CHECK(totk_ft_snapshot(totk_ft_current(), &record), "timeline retains identity walk frame");
+            if (ft_frame) {
+                totk_ft_record record = {0};
+                CHECK(totk_ft_current() == ft_frame + 1 && totk_ft_snapshot(ft_frame, &record),
+                      "timeline retains identity walk frame after the global frame advances");
                 CHECK(record.work.value[FT_COUNT_DRAWS] - ft_before.work.value[FT_COUNT_DRAWS] == 2068,
                       "timeline actual worker/inline draws match independently checked stream count");
-                CHECK(record.work.value[FT_COUNT_REC_SAMPLES] > ft_before.work.value[FT_COUNT_REC_SAMPLES] &&
-                      record.work.value[FT_COUNT_REC_P_NS] > ft_before.work.value[FT_COUNT_REC_P_NS],
-                      "timeline opcode sampling captures parallelizable work without requiring full profiler");
+                uint64_t desc_after[8];
+                vk_record_test_descriptors(desc_after);
+                uint64_t descriptors = record.work.value[FT_COUNT_DESC_CREATES] - ft_before.work.value[FT_COUNT_DESC_CREATES];
+                CHECK(descriptors == desc_after[0] - desc_before[0],
+                      "timeline descriptor total matches actual allocations on the originating frame");
+                timeline_descriptors += descriptors;
+                if (getenv("TOTK_VK_REC_PROFILE") && !strcmp(getenv("TOTK_VK_REC_PROFILE"), "1")) {
+                    CHECK(record.work.value[FT_COUNT_REC_SAMPLES] > ft_before.work.value[FT_COUNT_REC_SAMPLES] &&
+                          record.work.value[FT_COUNT_REC_P_NS] > ft_before.work.value[FT_COUNT_REC_P_NS],
+                          "explicit recorder profiling retains sampled parallelizable work");
+                } else {
+                    CHECK(!record.work.value[FT_COUNT_REC_SAMPLES] &&
+                          !record.work.value[FT_COUNT_REC_S_NS] && !record.work.value[FT_COUNT_REC_P_NS] &&
+                          !record.work.value[FT_COUNT_REC_O_NS] &&
+                          record.work.value[FT_COUNT_REC_WALL_NS] > ft_before.work.value[FT_COUNT_REC_WALL_NS],
+                          "timeline uses existing walk clocks, never opcode/category probes");
+                }
                 printf("frame-tl identity: frame=%llu samples=%llu S/P/O_ns=%llu/%llu/%llu draws=%llu cpu_steps=%llu\n",
                     (unsigned long long)record.frame, (unsigned long long)record.work.value[FT_COUNT_REC_SAMPLES],
                     (unsigned long long)record.work.value[FT_COUNT_REC_S_NS], (unsigned long long)record.work.value[FT_COUNT_REC_P_NS],
@@ -4831,6 +4859,21 @@ int main(int argc, char **argv) {
         const uint64_t footer[] = {0x5245434944454e33ull, 12};
         CHECK(fwrite(footer, sizeof footer, 1, out) == 1, "write identity footer");
         CHECK(!fclose(out), "close identity output");
+#ifdef TOTK_FRAME_TIMELINE_TEST
+        uint64_t wall_probes = totk_ft_test_probe_hits(FT_TEST_WALK_WALL);
+        uint64_t assembly_probes = totk_ft_test_probe_hits(FT_TEST_ASSEMBLY_WORK);
+        if (totk_ft_on()) {
+            CHECK(timeline_descriptors > 0, "timeline identity fixture collected live descriptor allocations");
+            CHECK(wall_probes > 0, "enabled timeline executes coarse per-walk accounting");
+            CHECK(!vk_record_enabled() || assembly_probes > 0,
+                  "enabled recorder executes assembled-slot accounting");
+        } else {
+            CHECK(!wall_probes && !assembly_probes,
+                  "disabled timeline executes no new walk or assembly probe, including with the full profiler on");
+        }
+        printf("frame-tl probe-check: enabled=%d walk=%llu assembly=%llu\n", totk_ft_on(),
+               (unsigned long long)wall_probes, (unsigned long long)assembly_probes);
+#endif
         printf("recorder identity timing ms/NVN-submit: walk wall %.3f body %.3f final %.3f summed worker busy %.3f background assembly wait %.3f walking wait %.3f body wait %.3f slots %.2f\n",
             walk_wall / 12e6, body_wall / 12e6, final_wall / 12e6, worker_busy / 12e6, assembly_wait / 12e6,
             walking_wait / 12e6, body_wait / 12e6, slot_sum / 12.0);

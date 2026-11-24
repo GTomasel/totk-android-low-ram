@@ -7,10 +7,10 @@
 
 /* Independent of recyclable backend slots. At 64 submissions/frame the ticket
  * history lasts as long as the frame history. No allocation, worker or I/O on
- * producers. Bounded lock attempts drop evidence rather than delaying a fence;
+ * producers. One lock attempt drops evidence rather than delaying a fence;
  * every such loss is reported. No lock is held across another lock or I/O. */
 enum { FF_TICKETS = FT_RING * FT_SLOTS, FF_SIGNAL_BUCKETS = FT_RING,
-       FF_SIGNAL_WAYS = 8, FF_WAITS = 8, FF_LOCK_TRIES = 64, FF_GROUPS = 4 };
+       FF_SIGNAL_WAYS = 8, FF_WAITS = 8, FF_GROUPS = 4 };
 typedef struct { _Atomic unsigned lock; totk_ff_ticket_record data; } ff_ticket_entry;
 typedef struct {
     _Atomic unsigned lock;
@@ -34,11 +34,9 @@ static _Atomic uint64_t busy_events, stale_tickets, stale_frames, stale_signals;
 static _Atomic uint64_t ticket_evictions, signal_evictions, wait_overflow, conflicts;
 
 static int take(_Atomic unsigned *lock) {
-    for (unsigned i = 0; i < FF_LOCK_TRIES; i++) {
-        unsigned expected = 0;
-        if (atomic_compare_exchange_weak_explicit(lock, &expected, 1,
-                memory_order_acquire, memory_order_relaxed)) return 1;
-    }
+    unsigned expected = 0;
+    if (atomic_compare_exchange_strong_explicit(lock, &expected, 1,
+            memory_order_acquire, memory_order_relaxed)) return 1;
     atomic_fetch_add_explicit(&busy_events, 1, memory_order_relaxed);
     return 0;
 }
@@ -295,6 +293,9 @@ void totk_ff_report(FILE *out, uint64_t first, uint64_t last) {
             atomic_load(&wait_overflow), atomic_load(&conflicts));
 }
 #ifdef TOTK_FRAME_TIMELINE_TEST
+int totk_ff_test_hold_ticket(uint64_t ticket) { return take(&tickets[ticket % FF_TICKETS].lock); }
+void totk_ff_test_release_ticket(uint64_t ticket) { release(&tickets[ticket % FF_TICKETS].lock); }
+
 void totk_ff_test_reset(void) {
     for (unsigned i = 0; i < FF_TICKETS; i++) { memset(&tickets[i].data, 0, sizeof tickets[i].data); atomic_store(&tickets[i].lock, 0); }
     for (unsigned i = 0; i < FF_SIGNAL_BUCKETS; i++) { memset(&signals[i].data, 0, sizeof signals[i].data); atomic_store(&signals[i].lock, 0); }

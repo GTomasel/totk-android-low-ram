@@ -54,6 +54,8 @@ typedef struct {
  * frame/index, never another generation's record. */
 void totk_ff_test_reset(void);
 int totk_ff_test_snapshot(uint64_t frame, unsigned index, totk_ff_snapshot *out);
+int totk_ff_test_hold_ticket(uint64_t ticket);
+void totk_ff_test_release_ticket(uint64_t ticket);
 #endif
 #else
 #define totk_ff_signal(...) ((void)0)

@@ -892,6 +892,11 @@ FILE classification path. Android syntax passed the final dirty tracker. Evidenc
 
 ## Frame critical-path timeline (opt-in, 2026-10-23)
 
+Keep `TOTK_FRAME_TIMELINE=0` for performance acceptance, or use the same setting in every comparison arm.
+In upstream's paired experiment, the rewritten timeline added 0.19% to walk CPU with a stationary camera in
+Hateno on an AYN Thor at 30 FPS. Upstream's first run exceeded its >50 ms tail threshold, and the paired
+follow-up passed it. These were upstream builds in one scene. Review the [upstream measurements and conditions](https://github.com/AurelioB/totk-android/commit/9f839d529ca6759dc50b5526653ed37bde559aa7).
+
 Operator observation, **not rerun here**: Thor, 60-Hz panel, shipping 30-fps controller, protected lag,
 `CHUNK_DRAWS=600` and two recorder threads averages 29.6–29.8 fps, but each 300-frame window contains 22–59
 40–60-ms frames followed by short frames. There are no in-game pipeline compiles; display pacing did not fix
@@ -925,7 +930,8 @@ Instrumentation and ownership:
   only after `nvnQueuePresentTexture` returns through its host implementation. Every host anchor uses
   `CLOCK_MONOTONIC`; GPU query durations are converted with the existing timestamp period, not mixed into the
   CPU time domain. There is no hot-path allocation, file write or per-frame logging. Disabled hooks do not read
-  clocks. Short atomic-flag critical sections protect record updates/snapshots, with no I/O under those flags.
+  clocks. Producers and snapshots try atomic-flag ownership once. Contention drops the update or copy,
+  and the holder releases the flag before I/O. Frame IDs advance even when a present update is dropped.
 - `runtime/threads.c` marks the guest thread actually calling `QueueSubmitCommands` as a walker. For its
   blocking SVC `0x34` address waits, the existing wake machinery records the signalling guest's handle and
   ready time. After the wait and virtual-core reacquisition, the first successful wake by TOTK main thread
@@ -988,6 +994,10 @@ completion evidence at the report deadline stays missing; the diagnostic does no
 - Capacity is 32 walks / 64 slots per frame. `lost_walks`, `lost_slots`, `overflow_frames`, `missing` and
   `expired_events` expose truncation or a reporter falling behind the ring. An expired async writer cannot
   corrupt a reused frame entry. Walking totals remain cumulative after walk-detail capacity is reached.
+- The summary's `dropped_events` counts contended producer updates and `inconsistent_samples` counts
+  busy snapshots that were skipped. The fence report's existing `busy` counter also counts single-attempt
+  contention. These are cumulative attempt counts. Losses can understate individual stages and hide
+  present intervals even when `missing=0`.
 
 ### Walk-variance counters
 
@@ -1013,25 +1023,21 @@ means; the preceding anchor frame is not counted. Empty groups print `n=0 ... mi
   counts new texture images, including format upgrades/dummy images, not views or shared-image reuse.
 - `cpu_steps` counts actual replay CPU-step boundaries. Creation/worker counters retain their originating walk's
   frame ID even when the work finishes later; no worker attributes work to whichever frame happens to be current.
-- `rec_s_ns/rec_p_ns/rec_o_ns` are the recorder's exclusive sequential/parallelizable/other split. Without
-  `TOTK_VK_REC_PROFILE`, opcode scopes are sampled at **1/64**, weighted by 64; `rec_samples` reports actual selected
-  scopes. Lifecycle outside opcode replay is measured directly. These are noisy per-frame time estimates, not exact
-  CPU-time counters or an overhead subtraction. If the full recorder profiler is explicitly enabled, its configured
-  sampling rate is retained instead; compare runs with the same settings.
-  They exclude asynchronous worker CPU time and are not a complete partition of walk wall time; the existing timing
-  scope ends before post-unlock resource sweeping.
+- `rec_wall_ns` sums the existing recorder wall-clock spans once per walk, including recorder waits.
+  Set `TOTK_VK_REC_PROFILE=1` to collect the separate sampled `rec_s_ns/rec_p_ns/rec_o_ns` categories
+  and `rec_samples`. With timeline alone those categories are unmeasured and report zero.
 
-Per-event walking counters use thread-local additions and are published once per walk. Secondary descriptor/draw
-counts publish per job, rather than taking the timeline ring lock for every draw/allocation. Rare asynchronous
-pipeline creation and slot-level guard registration publish against captured frame IDs. Disabled timeline accounting
-does not enable recorder profiling, create another reporter, alter pacing, or change rendering defaults.
+Walk counters accumulate thread-locally. Workers publish their draw and descriptor totals together when
+their slot assembles, using the frame ID captured for that slot. Asynchronous pipeline creation and guard
+registration also publish against captured IDs. With the timeline off, the new per-walk and per-slot
+accounting bodies are skipped even when the recorder profiler is on.
 
 Acquire diagnostics now retain the original total span and add `acquire_pacing` and `acquire_texture` (milliseconds)
 to late rows, plus their per-group means. The former measures the display-link/synthetic/deterministic pacing block;
 the latter measures prior texture replay/present-ticket waits. They are disjoint wall-clock scopes, not GPU query
 times, and neither includes acquire setup/sync publication.
 
-Walk-counter host acceptance: deterministic timeline tests passed enabled/disabled in normal and TSan builds,
+Before this backport, the walk-counter fixtures passed enabled/disabled in normal and TSan builds,
 including every counter's multi-walk accumulation, concurrent worker ownership, expired-frame rejection, acquire
 split, and a full 300-frame late/on-time mean comparison. Counter-enabled Vulkan core/draw fixtures passed normal
 and TSan at `REC_THREADS=0/2/3` with protected lag/writeback. Twelve identity runs additionally cover recorder counts
@@ -1040,26 +1046,25 @@ sampled parallelizable timing. All identity outputs are byte-identical across th
 `cc1.sh` checks passed for all nine changed C translation units without diagnostics. Evidence is under
 `.scratch/integ3/walk-variance/`; no device run or performance improvement is claimed.
 
-Use the existing frame-timeline environment, with `TOTK_FRAME_TIMELINE=1` and **`TOTK_VK_REC_PROFILE` unset** for
-the cheap fixed-1/64 path. Keep recorder count, lag and pacing settings identical to the baseline. Retain the entire
-`[frame-tl work]` pair and late rows; compare counter growth together with measured walk/off-CPU times, not sampled
-S/P/O alone. This change diagnoses variance; it does not change main-thread handoff or frame buffering.
+Use `TOTK_FRAME_TIMELINE=1` with `TOTK_VK_REC_PROFILE` unset to collect per-walk elapsed time.
+Match recorder count, lag and pacing across arms. Retain the `[frame-tl work]` pair, late rows and loss summary,
+and compare counter growth alongside measured walk and off-CPU times.
 
-Host acceptance exercised for this change: `.scratch/cc1.sh` passed for `frame_timeline.c`, `threads.c`,
-`hle_nvn.c`, `nvn_vk.c` and `vk_draw.c`; the deterministic bookkeeping test passed enabled and disabled.
-It covers late-then-short intervals, target changes and the exact +4-ms threshold, missing display evidence,
-out-of-order owner updates, frame IDs, concurrent slot writers/snapshots, capacity and stale ring-generation
-writes. From the project root (no game data or GPU required):
+From the project root, run the Linux bookkeeping, fence and stalled-reporter fixtures without game data or a GPU:
 
+```sh
+python3 -m unittest discover -s tests -p test_frame_timeline.py
 ```
-cc -std=c11 -O2 -Wall -Wextra -Werror -D_GNU_SOURCE \
-  -DTOTK_FRAME_TIMELINE_TEST -pthread \
-  wt-frametl/games/totk/android/gfx/test_frame_timeline.c \
-  wt-frametl/games/totk/runtime/frame_timeline.c \
-  wt-frametl/games/totk/runtime/frame_fence.c \
-  -o .scratch/FramePacing/test_frame_timeline
-.scratch/FramePacing/test_frame_timeline off
-.scratch/FramePacing/test_frame_timeline
+
+With Vulkan 1.3 and `glslangValidator`, the same suite can run the recorder identity fixture with the
+timeline and profiler independently on/off. Build it with the timeline probes compiled in:
+
+```sh
+out="$PWD/.scratch/vk-timeline"
+make -C games/totk/android TARGET=linux CC='cc -DTOTK_FRAME_TIMELINE_TEST' OUT="$out" \
+  "$out/vkdrawtest" "$out/vkdraw-seed/.done"
+TOTK_VK_TIMELINE_TEST="$out/vkdrawtest" TOTK_SHADER_SEED_DIR="$out/vkdraw-seed" \
+  python3 -m unittest discover -s tests -p test_frame_timeline.py
 ```
 
 Device plan (not executed here): run the reported Thor scenario warmed for at least 180 seconds with the above

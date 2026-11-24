@@ -17,6 +17,11 @@ cluster: a `su -c` per command costs the device a su session and, with Magisk, a
 Common options: `-s <serial>` (adb serial), `--device <label>` (a short name used in file names, e.g. `thor`),
 `--package` (default `com.aure.totk`), `--game-dir` (default `/data/user/0/<package>/files/game`).
 
+For performance comparisons, set `TOTK_FRAME_TIMELINE=0` or match the setting in every arm. Keep the
+`[frame-tl summary]` if using the timeline. Its loss counters are cumulative and contention can leave gaps
+in stage or interval evidence. Timeline-only launches report `rec_wall_ns`. The sampled recorder
+categories require `TOTK_VK_REC_PROFILE=1`. See the [frame timeline guide](../../games/totk/android/DEBUGGING.md#frame-critical-path-timeline-opt-in-2026-10-23).
+
 | Script | Use |
 |---|---|
 | `bench_input.sh -s <serial> [--event /dev/input/eventN] [--display <id>] <action>` | `press <A\|B\|X\|Y\|L\|R\|PLUS\|MINUS\|UP\|DOWN\|LEFT\|RIGHT> [ms]`, `rstick <x> [y]` (`rstick 0` releases), `shot <file>`, `log`, `detect`, `freqs` (the frequency limits as one line: `cpuN=<cpus>:<scaling_min>:<scaling_max>:<cpuinfo_max>` kHz per cpufreq policy, `gpu_maxclk`, `gpu_freqs`, `gpu_devfreq_max`, GPU power levels). Auto-detects the controller node (`getevent -p`: ABS_Z/ABS_RZ + BTN_SOUTH) and the first display (`dumpsys SurfaceFlinger --display-id`). |

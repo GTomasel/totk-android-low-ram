@@ -294,6 +294,23 @@ static void concurrent_snapshots(void) {
     totk_ff_snapshot s = get(1000, 0);
     assert(s.effective.seen == 15 && s.effective.frame == 1000 && s.completion == FF_COMPLETE_GPU_PROGRESS);
 }
+static void contended_ticket(void) {
+    totk_ff_test_reset();
+    const uint64_t frame = 2, value = 5;
+    ticket(frame, value, 115 * ms, 119 * ms, 3);
+    totk_ff_wait_record w = wait_record(frame, 0x12000, value, value, 110 * ms, 120 * ms);
+    totk_ff_wait(&w);
+    assert(totk_ff_test_hold_ticket(value));
+    /* The owner cannot release until the producer returns. The harness
+       timeout detects an acquisition that waits for diagnostic metadata. */
+    totk_ff_ticket_publish(value, 123 * ms, 7);
+    totk_ff_test_release_ticket(value);
+    totk_ff_snapshot s = get(frame, 0);
+    assert(s.effective_status == FF_META_OK && s.effective.publish_ns == 119 * ms && s.effective.post_ops == 3);
+    char *text = report(frame, frame, 0);
+    assert(strstr(text, "cumulative(busy,stale_ticket,stale_frame,stale_signal,ticket_evictions,signal_evictions,wait_overflow,conflicts)=1/0/0/0/0/0/0/0"));
+    free(text);
+}
 int main(int argc, char **argv) {
     int off = argc > 1 && !strcmp(argv[1], "off");
     setenv("TOTK_FRAME_TIMELINE", off ? "0" : "1", 1);
@@ -307,7 +324,7 @@ int main(int argc, char **argv) {
         puts("frame fence: disabled path passed"); return 0;
     }
     core_forwarding(); categories_and_owners(); acquire_ticket_sources(); all_frame_window();
-    out_of_order_and_reuse(); wrap_and_overflow(); concurrent_snapshots();
+    out_of_order_and_reuse(); wrap_and_overflow(); concurrent_snapshots(); contended_ticket();
     puts("frame fence: raw/effective owners, GPU/CPU publication, immediate sources, timeout/unfenced/missing, all-frame anchors, out-of-order/reuse, stale/overflow and concurrent snapshots passed");
     return 0;
 }

@@ -30,8 +30,10 @@ static int checks, fails;
 enum { SOURCE_W = 96, SOURCE_H = 32, OUTPUT_W = 960, OUTPUT_H = 320, WINDOW_PAD = 7 };
 static uint32_t source_w = SOURCE_W, source_h = SOURCE_H, output_w = OUTPUT_W, output_h = OUTPUT_H;
 static uint32_t window_w = OUTPUT_W, window_h = OUTPUT_H;
-static int native_ui, native_pattern, guest_output;
+static int native_ui, native_pattern, guest_output, guest_stretch;
 static uint32_t guest_canvas_w, guest_canvas_h;
+static float guest_shown_aspect;
+float runtime_aspect_now(void) { return guest_shown_aspect; }
 static _Atomic unsigned window_queries;
 static uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + t.tv_nsec; }
 
@@ -122,6 +124,9 @@ static void guest_display_policy_tests(void) {
               "guest fit case %u: %d,%d %ux%u expected %d,%d %ux%u", i, fit.x, fit.y, fit.w, fit.h, f.x, f.y, f.w, f.h);
         CHECK(shown.x == s.x && shown.y == s.y && shown.w == s.w && shown.h == s.h,
               "guest display case %u: %d,%d %ux%u expected %d,%d %ux%u", i, shown.x, shown.y, shown.w, shown.h, s.x, s.y, s.w, s.h);
+        if (f.w == cases[i].ww || f.h == cases[i].wh)
+            CHECK(shown.x == fit.x && shown.y == fit.y && shown.w == fit.w && shown.h == fit.h,
+                  "guest display case %u keeps the fitted rectangle when it already touches a window edge", i);
         vk_present_rect stretched = vk_present_guest_display(fit, cases[i].ww, cases[i].wh, 1);
         CHECK(!stretched.x && !stretched.y && stretched.w == cases[i].ww && stretched.h == cases[i].wh,
               "guest stretch case %u fills the window", i);
@@ -198,7 +203,9 @@ static uint32_t background_pixel(unsigned x, unsigned y) {
     if (guest_output) {
         /* Independent oracle (not the production helpers): the canvas aspect-fitted to the whole window,
            enlarged when the window is larger, centered. */
+        if (guest_stretch) return COLOR(0,255,0);
         uint32_t gw=guest_canvas_w ? guest_canvas_w : source_w, gh=guest_canvas_h ? guest_canvas_h : source_h;
+        if (guest_shown_aspect > 0) gw = (uint32_t)(gh * (double)guest_shown_aspect + 0.5);
         double sc=fmin((double)output_w/gw,(double)output_h/gh);
         vk_present_rect fit={0,0,(uint32_t)(gw*sc+0.5),(uint32_t)(gh*sc+0.5)};
         fit.x=((int32_t)output_w-(int32_t)fit.w)/2; fit.y=((int32_t)output_h-(int32_t)fit.h)/2;
@@ -860,6 +867,8 @@ int main(int argc, char **argv) {
     if (extent_diag) setenv("TOTK_FRAMEGEN_DIAG","1",1);
     const char *extent_cache=getenv("TOTK_GUEST_EXTENT_CACHE");
     int cached_extent=!extent_cache || strcmp(extent_cache,"0");
+    const char *stretch = getenv("TOTK_PRESENT_STRETCH");
+    guest_stretch = stretch && !strcmp(stretch, "1");
     int capture=argc>1 && !guest_output;
     const char *env_mode = getenv("TOTK_OVERLAY");
     int expected_mode = !env_mode ? (TOTK_DEV_BUILD ? 2 : 0) : (!strcmp(env_mode,"1") || !strcmp(env_mode,"fps")) ? 1 : !strcmp(env_mode,"full") ? 2 : 0;
@@ -925,8 +934,9 @@ int main(int argc, char **argv) {
     CHECK(vk_window_test_cached_extent() == ((uint64_t)window_w << 32 | window_h),
           "coherent window extent is published before the first frame");
     int posted_all = 1;
-    unsigned frames = extent_diag ? 600 : capture ? 125 : guest_output ? 11 : 7, expected_posts=0;
+    unsigned frames = extent_diag ? 600 : capture ? 125 : guest_output ? 14 : 7, expected_posts=0;
     uint32_t cached_canvas_w = 0, cached_canvas_h = 0;
+    float cached_aspect = 0;
     unsigned steady_queries = 0;
     for (unsigned n = 1; n <= frames; n++) {
         if (guest_output && n == 2) {
@@ -954,6 +964,7 @@ int main(int argc, char **argv) {
             output_w = n == 3 ? 2400 : VK_NATIVE_UI_WIDTH;
             output_h = n == 4 ? 1200 : VK_NATIVE_UI_HEIGHT;
             if (guest_output) {
+                if (n==3) window_h=1504; /* both axes exceed the 1920x1080 canvas */
                 if (n==5) { window_w=1280; window_h=800; }
                 output_w=window_w; output_h=window_h;
             }
@@ -968,18 +979,36 @@ int main(int argc, char **argv) {
             CHECK(vk_window_test_cached_extent() == ((uint64_t)window_w << 32 | window_h),
                   "lifecycle publishes a coherent width/height pair");
         }
+        if (guest_output && (n == 12 || n == 13)) {
+            window_w = output_w = n == 12 ? 2560 : 2400;
+            window_h = output_h = n == 12 ? 1080 : 1504;
+            vk_window_resized(&window, window_epoch);
+        }
         if (n >= 5 && n <= 7) {
             /* Minus+R: three live steps visit every mode once and return to the startup mode,
                re-laying out the next present (fps is one row) and checked by the same oracle. */
             int before = vk_overlay_mode(), after = vk_overlay_cycle();
             CHECK(after == (before + 1) % 3 && vk_overlay_mode() == after, "frame %u live overlay step %d -> %d", n, before, after);
         }
+        int crop[4] = {0};
+        guest_canvas_w = source_w; guest_canvas_h = source_h;
+        guest_shown_aspect = guest_output && n == 13 ? 2.0f : 0;
+        if (guest_output && n >= 8 && n != 12) {
+            guest_canvas_w = (n < 10 || n == 13 || n == 14) ? 1280 : 960;
+            guest_canvas_h = guest_canvas_w == 1280 ? 720 : 536;
+            crop[0] = 64; crop[1] = 32;
+            crop[2] = (int)guest_canvas_w; crop[3] = (int)guest_canvas_h;
+        }
         mtl_sub_begin(); vk_tex *x = vk_tex_get(&texture); VkCommandBuffer cb = vk_cb(); vk_barrier_all(cb);
-        if (native_pattern) {
+        int crop_pattern = crop[2] && (n == 8 || n == 13);
+        if (native_pattern || crop_pattern) {
             VkBuffer upload; VkDeviceSize offset;
             uint32_t *pixels = vk_transient((size_t)source_w * source_h * 4, 4, &upload, &offset);
-            for (unsigned y = 0; y < source_h; y++) for (unsigned x = 0; x < source_w; x++)
-                pixels[(size_t)y * source_w + x] = source_pixel(x,y);
+            for (unsigned y = 0; y < source_h; y++) for (unsigned x = 0; x < source_w; x++) {
+                /* Detect lost crop origins. Stay clear of the valid crop's linear-filter footprint. */
+                int outside_crop = crop_pattern && (x + 4 < (unsigned)crop[0] || y + 4 < (unsigned)crop[1]);
+                pixels[(size_t)y * source_w + x] = outside_crop ? COLOR(255,0,0) : source_pixel(x,y);
+            }
             VkBufferImageCopy copy = {.bufferOffset = offset, .imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT,0,0,1},
                 .imageExtent = {source_w,source_h,1}};
             vkCmdCopyBufferToImage(cb, upload, vk_tex_image(x), VK_IMAGE_LAYOUT_GENERAL, 1, &copy);
@@ -989,22 +1018,19 @@ int main(int argc, char **argv) {
         }
         vk_barrier_all(cb); uint64_t fence = mtl_sub_commit();
         CHECK(mtl_wait(fence, 5000000000ull), "source frame %u completes", n);
-        int crop[4] = {0};
-        guest_canvas_w = source_w; guest_canvas_h = source_h;
-        if (guest_output && n >= 8) {
-            guest_canvas_w = n < 10 ? 1280 : 960; guest_canvas_h = n < 10 ? 720 : 536;
-            crop[2] = (int)guest_canvas_w; crop[3] = (int)guest_canvas_h;
-        }
         unsigned queries_before = atomic_load_explicit(&window_queries, memory_order_relaxed);
         unsigned fits_before = vk_window_test_fit_rebuilds();
         mtl_present(&texture, 1.0 / 30, guest_output && crop[2] ? crop : NULL);
         unsigned fits_after = vk_window_test_fit_rebuilds();
         int ready_guest = guest_output && window_w && window_h;
         unsigned expected_fits = fits_before + (cached_extent && ready_guest &&
-            (cached_canvas_w != guest_canvas_w || cached_canvas_h != guest_canvas_h));
-        CHECK(fits_after == expected_fits, "frame %u recomputes cached fit only after canvas/crop change (%u -> %u)",
+            (cached_canvas_w != guest_canvas_w || cached_canvas_h != guest_canvas_h || cached_aspect != guest_shown_aspect));
+        CHECK(fits_after == expected_fits, "frame %u recomputes cached fit only after canvas or aspect change (%u -> %u)",
               n, fits_before, fits_after);
-        if (ready_guest) { cached_canvas_w = guest_canvas_w; cached_canvas_h = guest_canvas_h; }
+        if (ready_guest) {
+            cached_canvas_w = guest_canvas_w; cached_canvas_h = guest_canvas_h;
+            cached_aspect = guest_shown_aspect;
+        }
         if (guest_output && (!window_w || !window_h)) {
             CHECK(posts==expected_posts,"unready guest window defers without posting");
             unsigned calls = atomic_load_explicit(&window_queries, memory_order_relaxed) - queries_before;
@@ -1022,7 +1048,7 @@ int main(int argc, char **argv) {
     }
     CHECK(posted_all && posts == expected_posts && expected_posts == frames-(guest_output?1u:0u),
         "all ready frames traverse the real presenter (posts %u; capacity %u)",posts,VK_OVERLAY_SLOTS);
-    if (posted_all) CHECK(geometry_calls == (native_ui ? 6u : guest_output ? 5u : 1u),
+    if (posted_all) CHECK(geometry_calls == (native_ui ? 6u : guest_output ? 7u : 1u),
         "front-buffer geometry follows attachments and ignores unready guest windows (%u calls)", geometry_calls);
     CHECK(!guest_output || cached_extent ? steady_queries == 0 : steady_queries == expected_posts * 4,
           "steady-state ANativeWindow queries: %u (cache=%d; posted=%u)", steady_queries, cached_extent, expected_posts);
